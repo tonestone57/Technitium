@@ -48,7 +48,6 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using DnsServerCore.Dns.Security;
 using TechnitiumLibrary;
 using TechnitiumLibrary.IO;
 using TechnitiumLibrary.Net;
@@ -587,6 +586,8 @@ namespace DnsServerCore.Dns
                 _statsManager.MaxStatFileDays = 365;
 
                 SaveConfigFileInternal();
+
+                InitDnsCookiesIfEnabled();
             }
             catch (Exception ex)
             {
