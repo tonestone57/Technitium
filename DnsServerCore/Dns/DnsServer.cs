@@ -273,7 +273,6 @@ namespace DnsServerCore.Dns
         readonly bool _dnsCookiesEnabled = true;
         readonly string _dnsCookiesSecretFile = "dns.cookies.state";
         readonly int _dnsCookiesRotationPeriodHours = 1;
-        readonly bool _dnsCookiesSetTcOnBadCookie = true;
         readonly bool _dnsCookiesAlwaysEcho = true;
 
         Security.DnsCookieSecretManager _cookieSecrets;
@@ -1394,7 +1393,6 @@ namespace DnsServerCore.Dns
             bW.Write(_dnsCookiesEnabled);
             bW.Write(_dnsCookiesSecretFile ?? "dns.cookies.state");
             bW.Write(_dnsCookiesRotationPeriodHours);
-            bW.Write(_dnsCookiesSetTcOnBadCookie);
             bW.Write(_dnsCookiesAlwaysEcho);
         }
 
