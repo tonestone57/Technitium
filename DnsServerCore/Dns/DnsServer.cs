@@ -4009,7 +4009,19 @@ namespace DnsServerCore.Dns
             return false;
         }
 
-        private async Task<DnsDatagram> ProcessBlockedQueryAsync(DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol)
+        sealed class BlockedQueryResult
+        {
+            public BlockedQueryResult(DnsDatagram response, DnsQueryLogMetadata? logMetadata = null)
+            {
+                Response = response;
+                LogMetadata = logMetadata;
+            }
+
+            public DnsDatagram Response { get; }
+            public DnsQueryLogMetadata? LogMetadata { get; }
+        }
+
+        private async Task<BlockedQueryResult> ProcessBlockedQueryAsync(DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol)
         {
             if (_enableBlocking)
             {
@@ -4017,12 +4029,21 @@ namespace DnsServerCore.Dns
                 if (response is null)
                 {
                     //domain not blocked in blocked zone
-                    response = _blockListZoneManager.Query(request); //check in block list zone
+                    response = _blockListZoneManager.Query(request, out DnsQueryLogMetadata blockListLogMetadata); //check in block list zone
                     if (response is not null)
                     {
                         //domain is blocked in block list zone
-                        response.Tag = DnsServerResponseType.Blocked;
-                        return response;
+                        if (response.Tag is null)
+                        {
+                            string blockedDomain = request.Question[0].Name;
+                            DnsResourceRecord firstAuthority = response.FindFirstAuthorityRecord();
+                            if ((firstAuthority is not null) && (firstAuthority.Type == DnsResourceRecordType.SOA))
+                                blockedDomain = firstAuthority.Name;
+
+                            response.Tag = new DnsServerResponseMetadata(DnsServerResponseType.Blocked, new DnsQueryLogMetadata(new Dictionary<string, string>(2, StringComparer.OrdinalIgnoreCase) { ["source"] = "block-list-zone", ["domain"] = blockedDomain }));
+                        }
+
+                        return new BlockedQueryResult(response, blockListLogMetadata ?? DnsServerResponseTag.GetLogMetadata(response.Tag));
                     }
 
                     //domain not blocked in block list zone; continue to check app blocking handlers
@@ -4045,20 +4066,21 @@ namespace DnsServerCore.Dns
                     {
                         //return meta data
                         string blockedDomain = GetBlockedDomain();
+                        DnsQueryLogMetadata logMetadata = new DnsQueryLogMetadata(new Dictionary<string, string>(2, StringComparer.OrdinalIgnoreCase) { ["source"] = "blocked-zone", ["domain"] = blockedDomain });
 
-                        IReadOnlyList<DnsResourceRecord> answer = [new DnsResourceRecord(question.Name, DnsResourceRecordType.TXT, question.Class, _blockingAnswerTtl, new DnsTXTRecordData("source=blocked-zone; domain=" + blockedDomain))];
+                        IReadOnlyList<DnsResourceRecord> answer = [new DnsResourceRecord(question.Name, DnsResourceRecordType.TXT, question.Class, _blockingAnswerTtl, new DnsTXTRecordData(logMetadata.ToReportString()))];
 
-                        return new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, request.RecursionDesired, false, false, false, DnsResponseCode.NoError, request.Question, answer) { Tag = DnsServerResponseType.Blocked };
+                        return new BlockedQueryResult(new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, request.RecursionDesired, false, false, false, DnsResponseCode.NoError, request.Question, answer) { Tag = new DnsServerResponseMetadata(DnsServerResponseType.Blocked, logMetadata) }, logMetadata);
                     }
                     else
                     {
-                        string blockedDomain = null;
+                        string blockedDomain = GetBlockedDomain();
                         EDnsOption[] options = null;
+                        DnsQueryLogMetadata logMetadata = new DnsQueryLogMetadata(new Dictionary<string, string>(2, StringComparer.OrdinalIgnoreCase) { ["source"] = "blocked-zone", ["domain"] = blockedDomain });
 
                         if (_allowTxtBlockingReport && (request.EDNS is not null))
                         {
-                            blockedDomain = GetBlockedDomain();
-                            options = [new EDnsOption(EDnsOptionCode.EXTENDED_DNS_ERROR, new EDnsExtendedDnsErrorOptionData(EDnsExtendedDnsErrorCode.Blocked, "source=blocked-zone; domain=" + blockedDomain))];
+                            options = [new EDnsOption(EDnsOptionCode.EXTENDED_DNS_ERROR, new EDnsExtendedDnsErrorOptionData(EDnsExtendedDnsErrorCode.Blocked, logMetadata.ToReportString()))];
                         }
 
                         IReadOnlyCollection<DnsARecordData> aRecords;
@@ -4077,14 +4099,11 @@ namespace DnsServerCore.Dns
                                 break;
 
                             case DnsServerBlockingType.NxDomain:
-                                if (blockedDomain is null)
-                                    blockedDomain = GetBlockedDomain();
-
                                 string parentDomain = AuthZoneManager.GetParentZone(blockedDomain);
                                 if (parentDomain is null)
                                     parentDomain = string.Empty;
 
-                                return new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, request.RecursionDesired, false, false, false, DnsResponseCode.NxDomain, request.Question, null, [new DnsResourceRecord(parentDomain, DnsResourceRecordType.SOA, question.Class, _blockingAnswerTtl, _blockedZoneManager.DnsSOARecord)], null, request.EDNS is null ? ushort.MinValue : _udpPayloadSize, EDnsHeaderFlags.None, options) { Tag = DnsServerResponseType.Blocked };
+                                return new BlockedQueryResult(new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, request.RecursionDesired, false, false, false, DnsResponseCode.NxDomain, request.Question, null, [new DnsResourceRecord(parentDomain, DnsResourceRecordType.SOA, question.Class, _blockingAnswerTtl, _blockedZoneManager.DnsSOARecord)], null, request.EDNS is null ? ushort.MinValue : _udpPayloadSize, EDnsHeaderFlags.None, options) { Tag = new DnsServerResponseMetadata(DnsServerResponseType.Blocked, logMetadata) }, logMetadata);
 
                             default:
                                 throw new InvalidOperationException();
@@ -4141,7 +4160,7 @@ namespace DnsServerCore.Dns
                                 break;
                         }
 
-                        return new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, request.RecursionDesired, false, false, false, DnsResponseCode.NoError, request.Question, answer, authority, null, request.EDNS is null ? ushort.MinValue : _udpPayloadSize, EDnsHeaderFlags.None, options) { Tag = DnsServerResponseType.Blocked };
+                        return new BlockedQueryResult(new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, request.RecursionDesired, false, false, false, DnsResponseCode.NoError, request.Question, answer, authority, null, request.EDNS is null ? ushort.MinValue : _udpPayloadSize, EDnsHeaderFlags.None, options) { Tag = new DnsServerResponseMetadata(DnsServerResponseType.Blocked, logMetadata) }, logMetadata);
                     }
                 }
             }
@@ -4154,9 +4173,9 @@ namespace DnsServerCore.Dns
                     if (appBlockedResponse is not null)
                     {
                         if (appBlockedResponse.Tag is null)
-                            appBlockedResponse.Tag = DnsServerResponseType.Blocked;
+                            appBlockedResponse.Tag = new DnsServerResponseMetadata(DnsServerResponseType.Blocked);
 
-                        return appBlockedResponse;
+                        return new BlockedQueryResult(appBlockedResponse, DnsServerResponseTag.GetLogMetadata(appBlockedResponse.Tag));
                     }
                 }
                 catch (Exception ex)
@@ -4183,9 +4202,9 @@ namespace DnsServerCore.Dns
                 isAllowed = await IsAllowedAsync(request, remoteEP, protocol);
                 if (!isAllowed)
                 {
-                    DnsDatagram blockedResponse = await ProcessBlockedQueryAsync(request, remoteEP, protocol);
+                    BlockedQueryResult blockedResponse = await ProcessBlockedQueryAsync(request, remoteEP, protocol);
                     if (blockedResponse is not null)
-                        return blockedResponse;
+                        return blockedResponse.Response;
                 }
             }
 
@@ -4226,7 +4245,7 @@ namespace DnsServerCore.Dns
                             break; //CNAME is in allowed zone
 
                         //check blocked zone and block list zone
-                        DnsDatagram blockedResponse = await ProcessBlockedQueryAsync(newRequest, remoteEP, protocol);
+                        BlockedQueryResult blockedResponse = await ProcessBlockedQueryAsync(newRequest, remoteEP, protocol);
                         if (blockedResponse is not null)
                         {
                             //found cname cloaking
@@ -4237,21 +4256,26 @@ namespace DnsServerCore.Dns
                                 answer.Add(response.Answer[j]);
 
                             //copy last response answers
-                            answer.AddRange(blockedResponse.Answer);
+                            answer.AddRange(blockedResponse.Response.Answer);
 
                             //include blocked response additional section to pass on Extended DNS Errors
-                            return new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, true, true, false, false, blockedResponse.RCODE, request.Question, answer, blockedResponse.Authority, blockedResponse.Additional) { Tag = blockedResponse.Tag };
+                            return new DnsDatagram(request.Identifier, true, DnsOpcode.StandardQuery, false, false, true, true, false, false, blockedResponse.Response.RCODE, request.Question, answer, blockedResponse.Response.Authority, blockedResponse.Response.Additional)
+                            {
+                                Tag = blockedResponse.LogMetadata is null ? blockedResponse.Response.Tag : new DnsServerResponseMetadata(DnsServerResponseType.Blocked, blockedResponse.LogMetadata)
+                            };
                         }
                     }
                 }
             }
+
+            DnsServerResponseType responseType = DnsServerResponseTag.GetResponseType(response.Tag);
 
             if (response.Tag is null)
             {
                 if (response.IsBlockedResponse())
                     response.Tag = DnsServerResponseType.UpstreamBlocked;
             }
-            else if ((DnsServerResponseType)response.Tag == DnsServerResponseType.Cached)
+            else if (responseType == DnsServerResponseType.Cached)
             {
                 if (response.IsBlockedResponse())
                     response.Tag = DnsServerResponseType.UpstreamBlockedCached;

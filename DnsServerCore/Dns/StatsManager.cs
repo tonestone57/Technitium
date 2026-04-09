@@ -141,10 +141,8 @@ namespace DnsServerCore.Dns
 
                             if (item._response is null)
                                 responseType = DnsServerResponseType.Dropped;
-                            else if (item._response.Tag is null)
-                                responseType = DnsServerResponseType.Recursive;
                             else
-                                responseType = (DnsServerResponseType)item._response.Tag;
+                                responseType = DnsServerResponseTag.GetResponseType(item._response.Tag);
 
                             statCounter.Update(query, item._response is null ? DnsResponseCode.NoError : item._response.RCODE, responseType, item._remoteEP.Address, item._protocol, item._rateLimited);
                         }
@@ -156,7 +154,12 @@ namespace DnsServerCore.Dns
                         {
                             try
                             {
-                                _ = logger.InsertLogAsync(item._timestamp, item._request, item._remoteEP, item._protocol, item._response);
+                                DnsQueryLogMetadata? logMetadata = DnsServerResponseTag.GetLogMetadata(item._response.Tag);
+
+                                if (logger is IDnsQueryLoggerEx loggerEx)
+                                    _ = loggerEx.InsertLogAsync(item._timestamp, item._request, item._remoteEP, item._protocol, item._response, logMetadata);
+                                else
+                                    _ = logger.InsertLogAsync(item._timestamp, item._request, item._remoteEP, item._protocol, item._response);
                             }
                             catch (Exception ex)
                             {
