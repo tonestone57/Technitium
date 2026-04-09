@@ -150,16 +150,22 @@ namespace MispConnector
             }
 
             string blockingReport = $"source=misp-connector;domain={blockedDomain}";
+            DnsQueryLogMetadata logMetadata = new DnsQueryLogMetadata(new Dictionary<string, string>(2, StringComparer.OrdinalIgnoreCase)
+            {
+                ["source"] = "misp-connector",
+                ["domain"] = blockedDomain
+            });
+            DnsServerResponseMetadata responseMetadata = new DnsServerResponseMetadata(DnsServerResponseType.Blocked, logMetadata);
 
             EDnsOption[] options = null;
             if (_config.AddExtendedDnsError && request.EDNS is not null)
             {
-                options = new EDnsOption[] { new EDnsOption(EDnsOptionCode.EXTENDED_DNS_ERROR, new EDnsExtendedDnsErrorOptionData(EDnsExtendedDnsErrorCode.Blocked, string.Empty)) };
+                options = new EDnsOption[] { new EDnsOption(EDnsOptionCode.EXTENDED_DNS_ERROR, new EDnsExtendedDnsErrorOptionData(EDnsExtendedDnsErrorCode.Blocked, blockingReport)) };
             }
 
             if (_config.AllowTxtBlockingReport && question.Type == DnsResourceRecordType.TXT)
             {
-                DnsResourceRecord[] answer = new DnsResourceRecord[] { new DnsResourceRecord(question.Name, DnsResourceRecordType.TXT, question.Class, 60, new DnsTXTRecordData(string.Empty)) };
+                DnsResourceRecord[] answer = new DnsResourceRecord[] { new DnsResourceRecord(question.Name, DnsResourceRecordType.TXT, question.Class, 60, new DnsTXTRecordData(blockingReport)) };
                 return Task.FromResult(new DnsDatagram(
                                     ID: request.Identifier,
                                     isResponse: true,
@@ -178,7 +184,7 @@ namespace MispConnector
                                     udpPayloadSize: request.EDNS is null ? ushort.MinValue : _dnsServer.UdpPayloadSize,
                                     ednsFlags: EDnsHeaderFlags.None,
                                     options: options
-                                ));
+                                ) { Tag = responseMetadata });
             }
 
             DnsResourceRecord[] authority = { new DnsResourceRecord(question.Name, DnsResourceRecordType.SOA, question.Class, 60, _soaRecord) };
@@ -200,7 +206,7 @@ namespace MispConnector
                             udpPayloadSize: request.EDNS is null ? ushort.MinValue : _dnsServer.UdpPayloadSize,
                             ednsFlags: EDnsHeaderFlags.None,
                             options: options
-                        ));
+                        ) { Tag = responseMetadata });
         }
 
         #endregion public

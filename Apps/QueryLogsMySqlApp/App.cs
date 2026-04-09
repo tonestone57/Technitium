@@ -34,7 +34,7 @@ using TechnitiumLibrary.Net.Dns.ResourceRecords;
 
 namespace QueryLogsMySql
 {
-    public sealed class App : IDnsApplication, IDnsQueryLogger, IDnsQueryLogs
+    public sealed class App : IDnsApplication, IDnsQueryLoggerEx, IDnsQueryLogs
     {
         #region variables
 
@@ -216,14 +216,14 @@ namespace QueryLogsMySql
                     await using (MySqlCommand command = connection.CreateCommand())
                     {
                         sb.Length = 0;
-                        sb.Append("INSERT INTO dns_logs (server, timestamp, client_ip, protocol, response_type, response_rtt, rcode, qname, qtype, qclass, answer) VALUES ");
+                        sb.Append("INSERT INTO dns_logs (server, timestamp, client_ip, protocol, response_type, response_rtt, rcode, qname, qtype, qclass, answer, blocking_metadata) VALUES ");
 
                         for (int i = 0; i < logs.Count; i++)
                         {
                             if (i == 0)
-                                sb.Append($"(@server{i}, @timestamp{i}, @client_ip{i}, @protocol{i}, @response_type{i}, @response_rtt{i}, @rcode{i}, @qname{i}, @qtype{i}, @qclass{i}, @answer{i})");
+                                sb.Append($"(@server{i}, @timestamp{i}, @client_ip{i}, @protocol{i}, @response_type{i}, @response_rtt{i}, @rcode{i}, @qname{i}, @qtype{i}, @qclass{i}, @answer{i}, @blocking_metadata{i})");
                             else
-                                sb.Append($", (@server{i}, @timestamp{i}, @client_ip{i}, @protocol{i}, @response_type{i}, @response_rtt{i}, @rcode{i}, @qname{i}, @qtype{i}, @qclass{i}, @answer{i})");
+                                sb.Append($", (@server{i}, @timestamp{i}, @client_ip{i}, @protocol{i}, @response_type{i}, @response_rtt{i}, @rcode{i}, @qname{i}, @qtype{i}, @qclass{i}, @answer{i}, @blocking_metadata{i})");
                         }
                         command.CommandText = sb.ToString();
 
@@ -242,18 +242,14 @@ namespace QueryLogsMySql
                             MySqlParameter paramQtype = command.Parameters.Add("@qtype" + i, MySqlDbType.Int16);
                             MySqlParameter paramQclass = command.Parameters.Add("@qclass" + i, MySqlDbType.Int16);
                             MySqlParameter paramAnswer = command.Parameters.Add("@answer" + i, MySqlDbType.VarChar);
+                            MySqlParameter paramBlockingMetadata = command.Parameters.Add("@blocking_metadata" + i, MySqlDbType.Text);
 
                             paramServer.Value = _dnsServer?.ServerDomain;
                             paramTimestamp.Value = log.Timestamp;
                             paramClientIp.Value = log.RemoteEP.Address.ToString();
                             paramProtocol.Value = (byte)log.Protocol;
 
-                            DnsServerResponseType responseType;
-
-                            if (log.Response.Tag == null)
-                                responseType = DnsServerResponseType.Recursive;
-                            else
-                                responseType = (DnsServerResponseType)log.Response.Tag;
+                            DnsServerResponseType responseType = DnsServerResponseTag.GetResponseType(log.Response.Tag);
 
                             paramResponseType.Value = (byte)responseType;
 
@@ -304,6 +300,11 @@ namespace QueryLogsMySql
 
                                 paramAnswer.Value = answer;
                             }
+
+                            if (log.Metadata is null)
+                                paramBlockingMetadata.Value = DBNull.Value;
+                            else
+                                paramBlockingMetadata.Value = JsonSerializer.Serialize(log.Metadata.Values);
                         }
 
                         await command.ExecuteNonQueryAsync();
@@ -375,7 +376,8 @@ CREATE TABLE IF NOT EXISTS dns_logs
     qname VARCHAR(255),
     qtype SMALLINT,
     qclass SMALLINT,
-    answer VARCHAR(4000)
+    answer VARCHAR(4000),
+    blocking_metadata TEXT
 );
 ";
 
@@ -397,6 +399,18 @@ CREATE TABLE IF NOT EXISTS dns_logs
                             await using (MySqlCommand command = connection.CreateCommand())
                             {
                                 command.CommandText = "ALTER TABLE dns_logs MODIFY protocol TINYINT UNSIGNED NOT NULL;";
+
+                                try
+                                {
+                                    await command.ExecuteNonQueryAsync();
+                                }
+                                catch
+                                { }
+                            }
+
+                            await using (MySqlCommand command = connection.CreateCommand())
+                            {
+                                command.CommandText = "ALTER TABLE dns_logs ADD blocking_metadata TEXT;";
 
                                 try
                                 {
@@ -667,8 +681,13 @@ CREATE TABLE IF NOT EXISTS dns_logs
 
         public Task InsertLogAsync(DateTime timestamp, DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol, DnsDatagram response)
         {
+            return InsertLogAsync(timestamp, request, remoteEP, protocol, response, null);
+        }
+
+        public Task InsertLogAsync(DateTime timestamp, DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol, DnsDatagram response, DnsQueryLogMetadata? metadata)
+        {
             if (_enableLogging)
-                _channelWriter?.TryWrite(new LogEntry(timestamp, request, remoteEP, protocol, response));
+                _channelWriter?.TryWrite(new LogEntry(timestamp, request, remoteEP, protocol, response, metadata));
 
             return Task.CompletedTask;
         }
@@ -892,18 +911,20 @@ ORDER BY row_num" + (descendingOrder ? " DESC" : "");
             public readonly IPEndPoint RemoteEP;
             public readonly DnsTransportProtocol Protocol;
             public readonly DnsDatagram Response;
+            public readonly DnsQueryLogMetadata? Metadata;
 
             #endregion
 
             #region constructor
 
-            public LogEntry(DateTime timestamp, DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol, DnsDatagram response)
+            public LogEntry(DateTime timestamp, DnsDatagram request, IPEndPoint remoteEP, DnsTransportProtocol protocol, DnsDatagram response, DnsQueryLogMetadata? metadata = null)
             {
                 Timestamp = timestamp;
                 Request = request;
                 RemoteEP = remoteEP;
                 Protocol = protocol;
                 Response = response;
+                Metadata = metadata ?? DnsServerResponseTag.GetLogMetadata(response.Tag);
             }
 
             #endregion
