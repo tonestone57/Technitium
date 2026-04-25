@@ -1627,6 +1627,8 @@ namespace DnsServerCore
                     options.Scope.Add("openid");
                     options.Scope.Add("profile");
                     options.Scope.Add("email");
+                    options.Scope.Add("groups");
+                    options.Scope.Add("roles");
 
                     options.CallbackPath = new PathString("/sso/callback");
 
