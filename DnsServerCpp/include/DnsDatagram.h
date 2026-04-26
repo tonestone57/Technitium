@@ -7,6 +7,7 @@
 #include <vector>
 #include <cstdint>
 #include <iostream>
+#include <map>
 
 class DnsDatagram {
 public:
@@ -52,7 +53,7 @@ public:
     const std::vector<DnsResourceRecord>& getAdditionals() const { return additionals; }
     void addAdditional(const DnsResourceRecord& a) { additionals.push_back(a); }
 
-    static void writeDomainName(std::vector<uint8_t>& buffer, const std::string& domain);
+    static void writeDomainName(std::vector<uint8_t>& buffer, const std::string& domain, std::map<std::string, uint16_t>& domainOffsets);
 
 private:
     uint16_t identifier = 0;

@@ -5,12 +5,25 @@
 #include <iostream>
 #include <algorithm>
 
-static std::vector<std::string> split(const std::string& s) {
+static std::vector<std::string> robustSplit(const std::string& line) {
     std::vector<std::string> tokens;
-    std::string token;
-    std::istringstream tokenStream(s);
-    while (tokenStream >> token) {
-        tokens.push_back(token);
+    std::string current;
+    bool inQuotes = false;
+    for (size_t i = 0; i < line.size(); ++i) {
+        char c = line[i];
+        if (c == '"') {
+            inQuotes = !inQuotes;
+        } else if (std::isspace(c) && !inQuotes) {
+            if (!current.empty()) {
+                tokens.push_back(current);
+                current.clear();
+            }
+        } else {
+            current += c;
+        }
+    }
+    if (!current.empty()) {
+        tokens.push_back(current);
     }
     return tokens;
 }
@@ -26,7 +39,7 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == ';') continue;
 
-        auto tokens = split(line);
+        auto tokens = robustSplit(line);
         if (tokens.size() < 4) continue;
 
         std::string name = tokens[0];
@@ -66,15 +79,7 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
             data = std::make_shared<DnsMXRecordData>(pref, target);
         } else if (typeStr == "TXT") {
             type = DnsResourceRecordType::TXT;
-            std::string text;
-            for (size_t i = 4; i < tokens.size(); ++i) {
-                if (i > 4) text += " ";
-                text += tokens[i];
-            }
-            if (text.size() >= 2 && text.front() == '"' && text.back() == '"') {
-                text = text.substr(1, text.size() - 2);
-            }
-            data = std::make_shared<DnsTXTRecordData>(text);
+            data = std::make_shared<DnsTXTRecordData>(tokens[4]);
         } else {
             continue;
         }

@@ -63,9 +63,9 @@ static void writeUint32(std::vector<uint8_t>& buffer, uint32_t value) {
     buffer.push_back(static_cast<uint8_t>(value & 0xFF));
 }
 
-static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<DnsResourceRecord>& records) {
+static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<DnsResourceRecord>& records, std::map<std::string, uint16_t>& domainOffsets) {
     for (const auto& r : records) {
-        DnsDatagram::writeDomainName(buffer, r.getName());
+        DnsDatagram::writeDomainName(buffer, r.getName(), domainOffsets);
         writeUint16(buffer, static_cast<uint16_t>(r.getType()));
         writeUint16(buffer, static_cast<uint16_t>(r.getDnsClass()));
         writeUint32(buffer, r.getTtl());
@@ -98,18 +98,18 @@ static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<
             }
             case DnsResourceRecordType::CNAME: {
                 auto cnameData = std::static_pointer_cast<DnsCNAMERecordData>(r.getRData());
-                DnsDatagram::writeDomainName(buffer, cnameData->getDomain());
+                DnsDatagram::writeDomainName(buffer, cnameData->getDomain(), domainOffsets);
                 break;
             }
             case DnsResourceRecordType::NS: {
                 auto nsData = std::static_pointer_cast<DnsNSRecordData>(r.getRData());
-                DnsDatagram::writeDomainName(buffer, nsData->getDomain());
+                DnsDatagram::writeDomainName(buffer, nsData->getDomain(), domainOffsets);
                 break;
             }
             case DnsResourceRecordType::MX: {
                 auto mxData = std::static_pointer_cast<DnsMXRecordData>(r.getRData());
                 writeUint16(buffer, mxData->getPreference());
-                DnsDatagram::writeDomainName(buffer, mxData->getDomain());
+                DnsDatagram::writeDomainName(buffer, mxData->getDomain(), domainOffsets);
                 break;
             }
             case DnsResourceRecordType::TXT: {
@@ -132,6 +132,7 @@ static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<
 
 std::vector<uint8_t> DnsDatagram::serialize() const {
     std::vector<uint8_t> buffer;
+    std::map<std::string, uint16_t> domainOffsets;
 
     writeUint16(buffer, identifier);
 
@@ -147,14 +148,14 @@ std::vector<uint8_t> DnsDatagram::serialize() const {
     writeUint16(buffer, static_cast<uint16_t>(additionals.size()));
 
     for (const auto& q : questions) {
-        writeDomainName(buffer, q.getName());
+        writeDomainName(buffer, q.getName(), domainOffsets);
         writeUint16(buffer, static_cast<uint16_t>(q.getType()));
         writeUint16(buffer, static_cast<uint16_t>(q.getDnsClass()));
     }
 
-    serializeRecordList(buffer, answers);
-    serializeRecordList(buffer, authorities);
-    serializeRecordList(buffer, additionals);
+    serializeRecordList(buffer, answers, domainOffsets);
+    serializeRecordList(buffer, authorities, domainOffsets);
+    serializeRecordList(buffer, additionals, domainOffsets);
 
     return buffer;
 }
@@ -193,34 +194,46 @@ std::string DnsDatagram::readDomainName(const uint8_t* buffer, size_t size, size
     return domain;
 }
 
-void DnsDatagram::writeDomainName(std::vector<uint8_t>& buffer, const std::string& domain) {
-    if (domain.empty()) {
-        buffer.push_back(0);
-        return;
-    }
-
+void DnsDatagram::writeDomainName(std::vector<uint8_t>& buffer, const std::string& domain, std::map<std::string, uint16_t>& domainOffsets) {
     std::string normalizedDomain = domain;
-    // Strip trailing dot if present for serialization logic
     if (!normalizedDomain.empty() && normalizedDomain.back() == '.') {
         normalizedDomain.pop_back();
     }
     std::transform(normalizedDomain.begin(), normalizedDomain.end(), normalizedDomain.begin(), ::tolower);
 
-    size_t start = 0;
-    size_t end = normalizedDomain.find('.');
-    while (end != std::string::npos) {
-        std::string label = normalizedDomain.substr(start, end - start);
-        if (label.size() > 63) label = label.substr(0, 63); // DNS label limit
+    if (normalizedDomain.empty()) {
+        buffer.push_back(0);
+        return;
+    }
+
+    std::string currentSuffix = normalizedDomain;
+    while (!currentSuffix.empty()) {
+        auto it = domainOffsets.find(currentSuffix);
+        if (it != domainOffsets.end()) {
+            uint16_t pointer = 0xC000 | it->second;
+            writeUint16(buffer, pointer);
+            return;
+        }
+
+        // Record current offset for this suffix if it fits in 14 bits
+        if (buffer.size() < 0x4000) {
+            domainOffsets[currentSuffix] = static_cast<uint16_t>(buffer.size());
+        }
+
+        size_t dotPos = currentSuffix.find('.');
+        std::string label;
+        if (dotPos == std::string::npos) {
+            label = currentSuffix;
+            currentSuffix = "";
+        } else {
+            label = currentSuffix.substr(0, dotPos);
+            currentSuffix = currentSuffix.substr(dotPos + 1);
+        }
+
+        if (label.size() > 63) label = label.substr(0, 63);
         buffer.push_back(static_cast<uint8_t>(label.size()));
         buffer.insert(buffer.end(), label.begin(), label.end());
-        start = end + 1;
-        end = normalizedDomain.find('.', start);
     }
-    std::string label = normalizedDomain.substr(start);
-    if (label.size() > 63) label = label.substr(0, 63);
-    if (!label.empty()) {
-        buffer.push_back(static_cast<uint8_t>(label.size()));
-        buffer.insert(buffer.end(), label.begin(), label.end());
-    }
+
     buffer.push_back(0);
 }
