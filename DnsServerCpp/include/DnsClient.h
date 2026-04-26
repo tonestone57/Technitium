@@ -7,6 +7,7 @@
 class DnsClient {
 public:
     static DnsDatagram query(const std::string& serverIp, int port, const DnsQuestionRecord& question, int timeoutSec = 5);
+    static DnsDatagram query(const std::string& serverIp, int port, const std::vector<DnsQuestionRecord>& questions, int timeoutSec = 5);
 };
 
 #endif // DNS_CLIENT_H

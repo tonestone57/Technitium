@@ -11,6 +11,10 @@
 #include <random>
 
 DnsDatagram DnsClient::query(const std::string& serverIp, int port, const DnsQuestionRecord& question, int timeoutSec) {
+    return query(serverIp, port, std::vector<DnsQuestionRecord>{question}, timeoutSec);
+}
+
+DnsDatagram DnsClient::query(const std::string& serverIp, int port, const std::vector<DnsQuestionRecord>& questions, int timeoutSec) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) throw std::runtime_error("Socket creation failed");
 
@@ -40,7 +44,9 @@ DnsDatagram DnsClient::query(const std::string& serverIp, int port, const DnsQue
     std::uniform_int_distribution<> dis(0, 65535);
     request.setIdentifier(static_cast<uint16_t>(dis(gen)));
     request.setRecursionDesired(true);
-    request.addQuestion(question);
+    for (const auto& q : questions) {
+        request.addQuestion(q);
+    }
 
     std::vector<uint8_t> requestBytes = request.serialize();
     if (sendto(sockfd, requestBytes.data(), requestBytes.size(), 0, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {

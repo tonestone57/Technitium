@@ -21,6 +21,7 @@ int main(int argc, char* argv[]) {
     else if (typeStr == "TXT") type = DnsResourceRecordType::TXT;
     else if (typeStr == "SOA") type = DnsResourceRecordType::SOA;
     else if (typeStr == "PTR") type = DnsResourceRecordType::PTR;
+    else if (typeStr == "ANY") type = DnsResourceRecordType::ANY;
 
     try {
         std::cout << "Querying " << domain << " " << typeStr << " record from " << serverIp << ":" << port << "..." << std::endl;
@@ -31,7 +32,7 @@ int main(int argc, char* argv[]) {
         std::cout << "Authoritative: " << (response.isAuthoritativeAnswer() ? "Yes" : "No") << std::endl;
         std::cout << "Answer section count: " << response.getAnswers().size() << std::endl;
         for (const auto& ans : response.getAnswers()) {
-            std::cout << "  - " << ans.getName() << " type " << static_cast<int>(ans.getType()) << " TTL " << ans.getTtl() << std::endl;
+            std::cout << "  - [Answer] " << ans.getName() << " type " << static_cast<int>(ans.getType()) << " TTL " << ans.getTtl() << std::endl;
             if (ans.getType() == DnsResourceRecordType::A) {
                 auto aData = std::static_pointer_cast<DnsARecordData>(ans.getRData());
                 std::cout << "    IP: " << aData->getIpAddress() << std::endl;
@@ -40,6 +41,14 @@ int main(int argc, char* argv[]) {
                 std::cout << "    TXT: " << txtData->getText() << std::endl;
             } else if (ans.getType() == DnsResourceRecordType::SOA) {
                 auto soaData = std::static_pointer_cast<DnsSOARecordData>(ans.getRData());
+                std::cout << "    SOA: " << soaData->getMName() << " " << soaData->getRName() << " Serial: " << soaData->getSerial() << std::endl;
+            }
+        }
+        std::cout << "Authority section count: " << response.getAuthorities().size() << std::endl;
+        for (const auto& auth : response.getAuthorities()) {
+            std::cout << "  - [Authority] " << auth.getName() << " type " << static_cast<int>(auth.getType()) << " TTL " << auth.getTtl() << std::endl;
+            if (auth.getType() == DnsResourceRecordType::SOA) {
+                auto soaData = std::static_pointer_cast<DnsSOARecordData>(auth.getRData());
                 std::cout << "    SOA: " << soaData->getMName() << " " << soaData->getRName() << " Serial: " << soaData->getSerial() << std::endl;
             }
         }

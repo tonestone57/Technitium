@@ -2,6 +2,7 @@
 #include "ZoneManager.h"
 #include "ZoneLoader.h"
 #include "DnsClient.h"
+#include "ThreadPool.h"
 #include <iostream>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -41,34 +42,70 @@ std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManage
 
     DnsResponseCode finalRcode = DnsResponseCode::NoError;
     bool isAuthoritative = true;
+    bool allLocal = true;
 
     for (const auto& question : request.getQuestions()) {
-        response.addQuestion(question);
         bool nameExists = false;
         auto records = zoneManager.findRecords(question.getName(), question.getType(), nameExists);
 
         if (nameExists) {
-            for (const auto& record : records) {
-                response.addAnswer(record);
-            }
-        } else if (!forwarderIp.empty()) {
-            if (request.getQuestions().size() == 1) {
-                try {
-                    DnsDatagram forwardResponse = DnsClient::query(forwarderIp, 53, question);
-                    if (forwardResponse.isParsedSuccessfully()) {
-                        forwardResponse.setIdentifier(request.getIdentifier());
-                        return forwardResponse.serialize();
-                    }
-                } catch (...) {
-                    finalRcode = DnsResponseCode::ServerFailure;
-                }
+            if (records.empty()) {
+                // Name exists but no records of this type (NODATA)
+                // finalRcode stays NoError, but we should add SOA to authority
             } else {
-                finalRcode = DnsResponseCode::NxDomain;
+                for (const auto& record : records) {
+                    response.addAnswer(record);
+                }
             }
-            isAuthoritative = false;
         } else {
-            if (finalRcode == DnsResponseCode::NoError) {
+            allLocal = false;
+            break;
+        }
+    }
+
+    if (allLocal) {
+        for (const auto& question : request.getQuestions()) {
+            response.addQuestion(question);
+            bool nameExists = false;
+            auto records = zoneManager.findRecords(question.getName(), question.getType(), nameExists);
+            if (!nameExists) {
                 finalRcode = DnsResponseCode::NxDomain;
+                auto soaRecords = zoneManager.findSOA(question.getName());
+                for (const auto& soa : soaRecords) response.addAuthority(soa);
+            } else if (records.empty()) {
+                auto soaRecords = zoneManager.findSOA(question.getName());
+                for (const auto& soa : soaRecords) response.addAuthority(soa);
+            }
+        }
+        response.setRcode(finalRcode);
+        response.setAuthoritativeAnswer(isAuthoritative);
+        return response.serialize();
+    } else if (!forwarderIp.empty()) {
+        try {
+            DnsDatagram forwardResponse = DnsClient::query(forwarderIp, 53, request.getQuestions());
+            if (forwardResponse.isParsedSuccessfully()) {
+                forwardResponse.setIdentifier(request.getIdentifier());
+                return forwardResponse.serialize();
+            }
+        } catch (...) {
+            finalRcode = DnsResponseCode::ServerFailure;
+        }
+        isAuthoritative = false;
+    } else {
+        // Not all local and no forwarder, return NxDomain for what we can't find
+        for (const auto& question : request.getQuestions()) {
+            response.addQuestion(question);
+            bool nameExists = false;
+            auto records = zoneManager.findRecords(question.getName(), question.getType(), nameExists);
+            if (!nameExists) {
+                finalRcode = DnsResponseCode::NxDomain;
+                auto soaRecords = zoneManager.findSOA(question.getName());
+                for (const auto& soa : soaRecords) response.addAuthority(soa);
+            } else if (records.empty()) {
+                auto soaRecords = zoneManager.findSOA(question.getName());
+                for (const auto& soa : soaRecords) response.addAuthority(soa);
+            } else {
+                for (const auto& record : records) response.addAnswer(record);
             }
         }
     }
@@ -83,7 +120,7 @@ void handleSignal(int sig) {
     stopServer = 1;
 }
 
-void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
+void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp, ThreadPool& pool) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
     if (sockfd < 0) { perror("UDP socket failed"); return; }
 
@@ -100,7 +137,6 @@ void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
 
     std::cout << "UDP DNS Server listening on port " << port << "..." << std::endl;
 
-    uint8_t buffer[1024];
     while (!stopServer) {
         struct pollfd pfd;
         pfd.fd = sockfd;
@@ -109,18 +145,25 @@ void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
 
         struct sockaddr_in cliaddr;
         socklen_t len = sizeof(cliaddr);
-        ssize_t n = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&cliaddr, &len);
-        if (n < 0) continue;
-
-        auto responseBytes = processQuery(buffer, n, zoneManager, forwarderIp);
-        if (!responseBytes.empty()) {
-            sendto(sockfd, responseBytes.data(), responseBytes.size(), 0, (const struct sockaddr *)&cliaddr, len);
+        uint8_t* buffer = new uint8_t[1024];
+        ssize_t n = recvfrom(sockfd, buffer, 1024, 0, (struct sockaddr *)&cliaddr, &len);
+        if (n < 0) {
+            delete[] buffer;
+            continue;
         }
+
+        pool.enqueue([sockfd, buffer, n, &zoneManager, forwarderIp, cliaddr, len]() {
+            auto responseBytes = processQuery(buffer, n, zoneManager, forwarderIp);
+            if (!responseBytes.empty()) {
+                sendto(sockfd, responseBytes.data(), responseBytes.size(), 0, (const struct sockaddr *)&cliaddr, len);
+            }
+            delete[] buffer;
+        });
     }
     close(sockfd);
 }
 
-void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
+void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp, ThreadPool& pool) {
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) { perror("TCP socket failed"); return; }
 
@@ -152,7 +195,7 @@ void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
         int connfd = accept(sockfd, (struct sockaddr *)&cliaddr, &len);
         if (connfd < 0) continue;
 
-        std::thread([connfd, &zoneManager, forwarderIp]() {
+        pool.enqueue([connfd, &zoneManager, forwarderIp]() {
             struct pollfd cpfd;
             cpfd.fd = connfd;
             cpfd.events = POLLIN;
@@ -172,7 +215,7 @@ void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
                 }
             }
             close(connfd);
-        }).detach();
+        });
     }
     close(sockfd);
 }
@@ -211,8 +254,9 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    std::thread udpThread(udpServer, port, std::ref(zoneManager), forwarderIp);
-    tcpServer(port, zoneManager, forwarderIp);
+    ThreadPool pool(10);
+    std::thread udpThread(udpServer, port, std::ref(zoneManager), forwarderIp, std::ref(pool));
+    tcpServer(port, zoneManager, forwarderIp, pool);
 
     udpThread.join();
     std::cout << "Server stopped." << std::endl;
