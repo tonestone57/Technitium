@@ -11,6 +11,7 @@
 #include <thread>
 #include <poll.h>
 #include <cstdio>
+#include <functional>
 
 void printUsage(const char* progName) {
     std::cout << "Usage: " << progName << " [-p <port>] [-f <forwarder_ip>] <zone_file>" << std::endl;

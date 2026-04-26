@@ -5,6 +5,7 @@
 #include <iostream>
 #include <algorithm>
 #include <cctype>
+#include <set>
 
 static std::vector<std::string> robustSplit(const std::string& line) {
     std::vector<std::string> tokens;
@@ -36,72 +37,83 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
         return false;
     }
 
+    static const std::set<std::string> knownTypes = {
+        "A", "AAAA", "CNAME", "NS", "MX", "TXT", "SOA"
+    };
+
     std::string line;
     while (std::getline(file, line)) {
         if (line.empty() || line[0] == ';') continue;
 
         auto tokens = robustSplit(line);
-        if (tokens.size() < 5) continue; // Minimum: name, ttl, class, type, data
+        if (tokens.size() < 3) continue;
 
         std::string name = tokens[0];
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
         if (!name.empty() && name.back() == '.') name.pop_back();
 
-        uint32_t ttl;
+        uint32_t ttl = 3600;
+        size_t typeIdx = 1;
+
+        // Try to parse TTL at index 1
         try {
-            ttl = std::stoul(tokens[1]);
-        } catch (...) {
-            continue;
+            size_t pos;
+            unsigned long val = std::stoul(tokens[1], &pos);
+            if (pos == tokens[1].size()) {
+                ttl = static_cast<uint32_t>(val);
+                typeIdx = 2;
+            }
+        } catch (...) {}
+
+        // Skip "IN" if present
+        if (typeIdx < tokens.size() && tokens[typeIdx] == "IN") {
+            typeIdx++;
         }
 
-        std::string typeStr = tokens[3];
+        if (typeIdx >= tokens.size()) continue;
+
+        std::string typeStr = tokens[typeIdx];
         std::shared_ptr<DnsResourceRecordData> data;
         DnsResourceRecordType type;
+        size_t dataIdx = typeIdx + 1;
 
-        if (typeStr == "A") {
-            if (tokens.size() < 5) continue;
+        if (typeStr == "A" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::A;
-            data = std::make_shared<DnsARecordData>(tokens[4]);
-        } else if (typeStr == "AAAA") {
-            if (tokens.size() < 5) continue;
+            data = std::make_shared<DnsARecordData>(tokens[dataIdx]);
+        } else if (typeStr == "AAAA" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::AAAA;
-            data = std::make_shared<DnsAAAARecordData>(tokens[4]);
-        } else if (typeStr == "CNAME") {
-            if (tokens.size() < 5) continue;
+            data = std::make_shared<DnsAAAARecordData>(tokens[dataIdx]);
+        } else if (typeStr == "CNAME" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::CNAME;
-            std::string target = tokens[4];
+            std::string target = tokens[dataIdx];
             std::transform(target.begin(), target.end(), target.begin(), ::tolower);
             if (!target.empty() && target.back() == '.') target.pop_back();
             data = std::make_shared<DnsCNAMERecordData>(target);
-        } else if (typeStr == "NS") {
-            if (tokens.size() < 5) continue;
+        } else if (typeStr == "NS" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::NS;
-            std::string target = tokens[4];
+            std::string target = tokens[dataIdx];
             std::transform(target.begin(), target.end(), target.begin(), ::tolower);
             if (!target.empty() && target.back() == '.') target.pop_back();
             data = std::make_shared<DnsNSRecordData>(target);
-        } else if (typeStr == "MX") {
-            if (tokens.size() < 6) continue;
+        } else if (typeStr == "MX" && dataIdx + 1 < tokens.size()) {
             type = DnsResourceRecordType::MX;
-            uint16_t pref = static_cast<uint16_t>(std::stoul(tokens[4]));
-            std::string target = tokens[5];
+            uint16_t pref = static_cast<uint16_t>(std::stoul(tokens[dataIdx]));
+            std::string target = tokens[dataIdx + 1];
             std::transform(target.begin(), target.end(), target.begin(), ::tolower);
             if (!target.empty() && target.back() == '.') target.pop_back();
             data = std::make_shared<DnsMXRecordData>(pref, target);
-        } else if (typeStr == "TXT") {
-            if (tokens.size() < 5) continue;
+        } else if (typeStr == "TXT" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::TXT;
-            data = std::make_shared<DnsTXTRecordData>(tokens[4]);
-        } else if (typeStr == "SOA") {
-            if (tokens.size() < 11) continue;
+            data = std::make_shared<DnsTXTRecordData>(tokens[dataIdx]);
+        } else if (typeStr == "SOA" && dataIdx + 6 < tokens.size()) {
             type = DnsResourceRecordType::SOA;
-            std::string mName = tokens[4];
-            std::string rName = tokens[5];
-            uint32_t serial = std::stoul(tokens[6]);
-            uint32_t refresh = std::stoul(tokens[7]);
-            uint32_t retry = std::stoul(tokens[8]);
-            uint32_t expire = std::stoul(tokens[9]);
-            uint32_t minimum = std::stoul(tokens[10]);
+            std::string mName = tokens[dataIdx];
+            std::string rName = tokens[dataIdx + 1];
+            uint32_t serial = std::stoul(tokens[dataIdx + 2]);
+            uint32_t refresh = std::stoul(tokens[dataIdx + 3]);
+            uint32_t retry = std::stoul(tokens[dataIdx + 4]);
+            uint32_t expire = std::stoul(tokens[dataIdx + 5]);
+            uint32_t minimum = std::stoul(tokens[dataIdx + 6]);
             data = std::make_shared<DnsSOARecordData>(mName, rName, serial, refresh, retry, expire, minimum);
         } else {
             continue;
