@@ -65,6 +65,8 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
     std::string origin;
     std::string lastRecordName;
     uint32_t defaultTtl = 3600;
+    bool inMultiline = false;
+    std::string multilineBuffer;
 
     while (std::getline(file, line)) {
         size_t commentPos = line.find(';');
@@ -72,6 +74,22 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
             line = line.substr(0, commentPos);
         }
         if (line.empty()) continue;
+
+        if (!inMultiline) {
+            if (line.find('(') != std::string::npos && line.find(')') == std::string::npos) {
+                inMultiline = true;
+                multilineBuffer = line;
+                continue;
+            }
+        } else {
+            multilineBuffer += " " + line;
+            if (line.find(')') != std::string::npos) {
+                inMultiline = false;
+                line = multilineBuffer;
+            } else {
+                continue;
+            }
+        }
 
         auto tokens = robustSplit(line);
         if (tokens.empty()) continue;

@@ -30,6 +30,17 @@ void printUsage(const char* progName) {
     std::cout << "Default port: 53" << std::endl;
 }
 
+bool sendAll(int fd, const void* buffer, size_t length) {
+    const uint8_t* ptr = static_cast<const uint8_t*>(buffer);
+    while (length > 0) {
+        ssize_t sent = send(fd, ptr, length, 0);
+        if (sent <= 0) return false;
+        ptr += sent;
+        length -= sent;
+    }
+    return true;
+}
+
 std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManager& zoneManager, const std::string& forwarderIp) {
     DnsDatagram request = DnsDatagram::readFrom(buffer, size);
     if (!request.isParsedSuccessfully() || request.getQuestions().empty()) return {};
@@ -193,8 +204,9 @@ void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp, Thre
                         auto responseBytes = processQuery(buffer.data(), dnsLen, zoneManager, forwarderIp);
                         if (!responseBytes.empty()) {
                             uint16_t resLen = htons(static_cast<uint16_t>(responseBytes.size()));
-                            send(connfd, &resLen, 2, 0);
-                            send(connfd, responseBytes.data(), responseBytes.size(), 0);
+                            if (sendAll(connfd, &resLen, 2)) {
+                                sendAll(connfd, responseBytes.data(), responseBytes.size());
+                            }
                         }
                     }
                 }
