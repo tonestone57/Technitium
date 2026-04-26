@@ -9,33 +9,51 @@
 #include <poll.h>
 #include <cstring>
 #include <random>
+#include <netdb.h>
 
 DnsDatagram DnsClient::query(const std::string& serverIp, int port, const DnsQuestionRecord& question, int timeoutSec) {
     return query(serverIp, port, std::vector<DnsQuestionRecord>{question}, timeoutSec);
 }
 
 DnsDatagram DnsClient::query(const std::string& serverIp, int port, const std::vector<DnsQuestionRecord>& questions, int timeoutSec) {
-    int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
-    if (sockfd < 0) throw std::runtime_error("Socket creation failed");
-
-    struct sockaddr_in servaddr;
-    memset(&servaddr, 0, sizeof(servaddr));
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_port = htons(static_cast<uint16_t>(port));
-
-    // Support parsing IP:PORT in serverIp
     std::string ip = serverIp;
-    int targetPort = port;
-    size_t colon = serverIp.find(':');
-    if (colon != std::string::npos) {
-        ip = serverIp.substr(0, colon);
-        targetPort = std::stoi(serverIp.substr(colon + 1));
-        servaddr.sin_port = htons(static_cast<uint16_t>(targetPort));
+    std::string portStr = std::to_string(port);
+
+    // Robust parsing for IP:PORT, handling IPv6 [addr]:port
+    if (!serverIp.empty()) {
+        if (serverIp[0] == '[') {
+            size_t bracketClose = serverIp.find(']');
+            if (bracketClose != std::string::npos) {
+                ip = serverIp.substr(1, bracketClose - 1);
+                size_t colon = serverIp.find(':', bracketClose);
+                if (colon != std::string::npos) {
+                    portStr = serverIp.substr(colon + 1);
+                }
+            }
+        } else {
+            size_t firstColon = serverIp.find(':');
+            size_t lastColon = serverIp.rfind(':');
+            // If there's only one colon, it's likely IPv4:port
+            if (firstColon != std::string::npos && firstColon == lastColon) {
+                ip = serverIp.substr(0, firstColon);
+                portStr = serverIp.substr(firstColon + 1);
+            }
+        }
     }
 
-    if (inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr) <= 0) {
-        close(sockfd);
-        throw std::runtime_error("Invalid server IP address");
+    struct addrinfo hints, *res;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_UNSPEC; // IPv4 or IPv6
+    hints.ai_socktype = SOCK_DGRAM;
+
+    if (getaddrinfo(ip.c_str(), portStr.c_str(), &hints, &res) != 0) {
+        throw std::runtime_error("Invalid server address or port: " + serverIp);
+    }
+
+    int sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol);
+    if (sockfd < 0) {
+        freeaddrinfo(res);
+        throw std::runtime_error("Socket creation failed");
     }
 
     DnsDatagram request;
@@ -49,17 +67,19 @@ DnsDatagram DnsClient::query(const std::string& serverIp, int port, const std::v
     }
 
     std::vector<uint8_t> requestBytes = request.serialize();
-    if (sendto(sockfd, requestBytes.data(), requestBytes.size(), 0, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+    if (sendto(sockfd, requestBytes.data(), requestBytes.size(), 0, res->ai_addr, res->ai_addrlen) < 0) {
+        freeaddrinfo(res);
         close(sockfd);
         throw std::runtime_error("Sendto failed");
     }
+    freeaddrinfo(res);
 
     struct pollfd pfd;
     pfd.fd = sockfd;
     pfd.events = POLLIN;
-    int res = poll(&pfd, 1, timeoutSec * 1000);
+    int pollRes = poll(&pfd, 1, timeoutSec * 1000);
 
-    if (res <= 0) {
+    if (pollRes <= 0) {
         close(sockfd);
         throw std::runtime_error("Query timed out or failed");
     }

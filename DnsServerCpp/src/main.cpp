@@ -51,7 +51,6 @@ std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManage
         if (nameExists) {
             if (records.empty()) {
                 // Name exists but no records of this type (NODATA)
-                // finalRcode stays NoError, but we should add SOA to authority
             } else {
                 for (const auto& record : records) {
                     response.addAnswer(record);
@@ -145,8 +144,8 @@ void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp, Thre
 
         struct sockaddr_in cliaddr;
         socklen_t len = sizeof(cliaddr);
-        uint8_t* buffer = new uint8_t[1024];
-        ssize_t n = recvfrom(sockfd, buffer, 1024, 0, (struct sockaddr *)&cliaddr, &len);
+        uint8_t* buffer = new uint8_t[4096];
+        ssize_t n = recvfrom(sockfd, buffer, 4096, 0, (struct sockaddr *)&cliaddr, &len);
         if (n < 0) {
             delete[] buffer;
             continue;
