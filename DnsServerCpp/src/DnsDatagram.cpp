@@ -14,37 +14,124 @@ static uint16_t readUint16(const uint8_t* buffer, size_t& offset, size_t size) {
     return value;
 }
 
+static uint32_t readUint32(const uint8_t* buffer, size_t& offset, size_t size) {
+    if (offset + 4 > size) throw std::runtime_error("Buffer overflow");
+    uint32_t value = (static_cast<uint32_t>(buffer[offset]) << 24) |
+                     (static_cast<uint32_t>(buffer[offset + 1]) << 16) |
+                     (static_cast<uint32_t>(buffer[offset + 2]) << 8) |
+                     static_cast<uint32_t>(buffer[offset + 3]);
+    offset += 4;
+    return value;
+}
+
+static std::shared_ptr<DnsResourceRecordData> parseRData(const uint8_t* buffer, size_t size, size_t& offset, DnsResourceRecordType type, uint16_t rdlen) {
+    size_t startOffset = offset;
+    std::shared_ptr<DnsResourceRecordData> data;
+
+    switch (type) {
+        case DnsResourceRecordType::A: {
+            if (rdlen != 4) throw std::runtime_error("Invalid A record length");
+            char ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, buffer + offset, ip, INET_ADDRSTRLEN);
+            data = std::make_shared<DnsARecordData>(ip);
+            offset += 4;
+            break;
+        }
+        case DnsResourceRecordType::AAAA: {
+            if (rdlen != 16) throw std::runtime_error("Invalid AAAA record length");
+            char ip[INET6_ADDRSTRLEN];
+            inet_ntop(AF_INET6, buffer + offset, ip, INET6_ADDRSTRLEN);
+            data = std::make_shared<DnsAAAARecordData>(ip);
+            offset += 16;
+            break;
+        }
+        case DnsResourceRecordType::CNAME: {
+            data = std::make_shared<DnsCNAMERecordData>(DnsDatagram::readDomainName(buffer, size, offset));
+            break;
+        }
+        case DnsResourceRecordType::NS: {
+            data = std::make_shared<DnsNSRecordData>(DnsDatagram::readDomainName(buffer, size, offset));
+            break;
+        }
+        case DnsResourceRecordType::MX: {
+            uint16_t pref = readUint16(buffer, offset, size);
+            std::string domain = DnsDatagram::readDomainName(buffer, size, offset);
+            data = std::make_shared<DnsMXRecordData>(pref, domain);
+            break;
+        }
+        case DnsResourceRecordType::TXT: {
+            std::string text;
+            size_t pos = 0;
+            while (pos < rdlen) {
+                uint8_t len = buffer[offset++];
+                text.append(reinterpret_cast<const char*>(buffer + offset), len);
+                offset += len;
+                pos += 1 + len;
+            }
+            data = std::make_shared<DnsTXTRecordData>(text);
+            break;
+        }
+        default:
+            offset += rdlen;
+            break;
+    }
+
+    // Ensure we didn't overshoot or undershoot rdlen if it's not a domain name jump
+    offset = startOffset + rdlen;
+    return data;
+}
+
+static void parseRecords(const uint8_t* buffer, size_t size, size_t& offset, uint16_t count, std::vector<DnsResourceRecord>& output) {
+    for (int i = 0; i < count; ++i) {
+        std::string name = DnsDatagram::readDomainName(buffer, size, offset);
+        uint16_t type = readUint16(buffer, offset, size);
+        uint16_t dnsClass = readUint16(buffer, offset, size);
+        uint32_t ttl = readUint32(buffer, offset, size);
+        uint16_t rdlen = readUint16(buffer, offset, size);
+
+        auto rData = parseRData(buffer, size, offset, static_cast<DnsResourceRecordType>(type), rdlen);
+        if (rData) {
+            output.emplace_back(name, static_cast<DnsResourceRecordType>(type), static_cast<DnsClass>(dnsClass), ttl, rData);
+        }
+    }
+}
+
 DnsDatagram DnsDatagram::readFrom(const uint8_t* buffer, size_t size) {
     DnsDatagram datagram;
     if (size < 12) return datagram;
 
     size_t offset = 0;
-    datagram.identifier = readUint16(buffer, offset, size);
-
-    uint8_t flags1 = buffer[offset++];
-    uint8_t flags2 = buffer[offset++];
-
-    datagram.qr = (flags1 >> 7) & 0x01;
-    datagram.opcode = static_cast<DnsOpcode>((flags1 >> 3) & 0x0F);
-    datagram.aa = (flags1 >> 2) & 0x01;
-    datagram.tc = (flags1 >> 1) & 0x01;
-    datagram.rd = flags1 & 0x01;
-
-    datagram.ra = (flags2 >> 7) & 0x01;
-    datagram.rcode = static_cast<DnsResponseCode>(flags2 & 0x0F);
-
-    uint16_t qdcount = readUint16(buffer, offset, size);
-    uint16_t ancount = readUint16(buffer, offset, size);
-    uint16_t nscount = readUint16(buffer, offset, size);
-    uint16_t arcount = readUint16(buffer, offset, size);
-
     try {
+        datagram.identifier = readUint16(buffer, offset, size);
+
+        uint8_t flags1 = buffer[offset++];
+        uint8_t flags2 = buffer[offset++];
+
+        datagram.qr = (flags1 >> 7) & 0x01;
+        datagram.opcode = static_cast<DnsOpcode>((flags1 >> 3) & 0x0F);
+        datagram.aa = (flags1 >> 2) & 0x01;
+        datagram.tc = (flags1 >> 1) & 0x01;
+        datagram.rd = flags1 & 0x01;
+
+        datagram.ra = (flags2 >> 7) & 0x01;
+        datagram.rcode = static_cast<DnsResponseCode>(flags2 & 0x0F);
+
+        uint16_t qdcount = readUint16(buffer, offset, size);
+        uint16_t ancount = readUint16(buffer, offset, size);
+        uint16_t nscount = readUint16(buffer, offset, size);
+        uint16_t arcount = readUint16(buffer, offset, size);
+
         for (int i = 0; i < qdcount; ++i) {
             std::string name = readDomainName(buffer, size, offset);
             uint16_t type = readUint16(buffer, offset, size);
             uint16_t dnsClass = readUint16(buffer, offset, size);
             datagram.addQuestion(DnsQuestionRecord(name, static_cast<DnsResourceRecordType>(type), static_cast<DnsClass>(dnsClass)));
         }
+
+        parseRecords(buffer, size, offset, ancount, datagram.answers);
+        parseRecords(buffer, size, offset, nscount, datagram.authorities);
+        parseRecords(buffer, size, offset, arcount, datagram.additionals);
+
     } catch (const std::exception& e) {
         // Log or handle parsing error
     }
@@ -116,8 +203,6 @@ static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<
             case DnsResourceRecordType::TXT: {
                 auto txtData = std::static_pointer_cast<DnsTXTRecordData>(r.getRData());
                 std::string text = txtData->getText();
-                // TXT record can have multiple character-strings, but for now we implement one
-                // Each character-string is preceded by a single byte length
                 size_t pos = 0;
                 while (pos < text.size()) {
                     size_t chunkLen = std::min(text.size() - pos, static_cast<size_t>(255));
@@ -223,7 +308,6 @@ void DnsDatagram::writeDomainName(std::vector<uint8_t>& buffer, const std::strin
             return;
         }
 
-        // Record current offset for this suffix if it fits in 14 bits
         if (buffer.size() < 0x4000) {
             domainOffsets[currentSuffix] = static_cast<uint16_t>(buffer.size());
         }

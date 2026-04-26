@@ -54,6 +54,7 @@ public:
     void addAdditional(const DnsResourceRecord& a) { additionals.push_back(a); }
 
     static void writeDomainName(std::vector<uint8_t>& buffer, const std::string& domain, std::map<std::string, uint16_t>& domainOffsets);
+    static std::string readDomainName(const uint8_t* buffer, size_t size, size_t& offset);
 
 private:
     uint16_t identifier = 0;
@@ -69,8 +70,6 @@ private:
     std::vector<DnsResourceRecord> answers;
     std::vector<DnsResourceRecord> authorities;
     std::vector<DnsResourceRecord> additionals;
-
-    static std::string readDomainName(const uint8_t* buffer, size_t size, size_t& offset);
 };
 
 #endif // DNS_DATAGRAM_H
