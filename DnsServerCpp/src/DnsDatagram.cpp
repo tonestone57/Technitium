@@ -2,6 +2,7 @@
 #include <arpa/inet.h>
 #include <cstring>
 #include <stdexcept>
+#include <algorithm>
 
 DnsDatagram::DnsDatagram() {}
 
@@ -62,6 +63,73 @@ static void writeUint32(std::vector<uint8_t>& buffer, uint32_t value) {
     buffer.push_back(static_cast<uint8_t>(value & 0xFF));
 }
 
+static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<DnsResourceRecord>& records) {
+    for (const auto& r : records) {
+        DnsDatagram::writeDomainName(buffer, r.getName());
+        writeUint16(buffer, static_cast<uint16_t>(r.getType()));
+        writeUint16(buffer, static_cast<uint16_t>(r.getDnsClass()));
+        writeUint32(buffer, r.getTtl());
+
+        size_t rdlen_offset = buffer.size();
+        writeUint16(buffer, 0); // Placeholder for RDLENGTH
+
+        size_t rdata_start = buffer.size();
+        switch (r.getType()) {
+            case DnsResourceRecordType::A: {
+                auto aData = std::static_pointer_cast<DnsARecordData>(r.getRData());
+                struct in_addr addr;
+                if (inet_pton(AF_INET, aData->getIpAddress().c_str(), &addr) == 1) {
+                    uint32_t ip = ntohl(addr.s_addr);
+                    writeUint32(buffer, ip);
+                } else {
+                    writeUint32(buffer, 0);
+                }
+                break;
+            }
+            case DnsResourceRecordType::AAAA: {
+                auto aaaaData = std::static_pointer_cast<DnsAAAARecordData>(r.getRData());
+                struct in6_addr addr;
+                if (inet_pton(AF_INET6, aaaaData->getIpAddress().c_str(), &addr) == 1) {
+                    buffer.insert(buffer.end(), addr.s6_addr, addr.s6_addr + 16);
+                } else {
+                    buffer.resize(buffer.size() + 16, 0);
+                }
+                break;
+            }
+            case DnsResourceRecordType::CNAME: {
+                auto cnameData = std::static_pointer_cast<DnsCNAMERecordData>(r.getRData());
+                DnsDatagram::writeDomainName(buffer, cnameData->getDomain());
+                break;
+            }
+            case DnsResourceRecordType::NS: {
+                auto nsData = std::static_pointer_cast<DnsNSRecordData>(r.getRData());
+                DnsDatagram::writeDomainName(buffer, nsData->getDomain());
+                break;
+            }
+            case DnsResourceRecordType::MX: {
+                auto mxData = std::static_pointer_cast<DnsMXRecordData>(r.getRData());
+                writeUint16(buffer, mxData->getPreference());
+                DnsDatagram::writeDomainName(buffer, mxData->getDomain());
+                break;
+            }
+            case DnsResourceRecordType::TXT: {
+                auto txtData = std::static_pointer_cast<DnsTXTRecordData>(r.getRData());
+                std::string text = txtData->getText();
+                if (text.size() > 255) text = text.substr(0, 255);
+                buffer.push_back(static_cast<uint8_t>(text.size()));
+                buffer.insert(buffer.end(), text.begin(), text.end());
+                break;
+            }
+            default:
+                break;
+        }
+        size_t rdata_end = buffer.size();
+        uint16_t rdlen = static_cast<uint16_t>(rdata_end - rdata_start);
+        buffer[rdlen_offset] = static_cast<uint8_t>(rdlen >> 8);
+        buffer[rdlen_offset + 1] = static_cast<uint8_t>(rdlen & 0xFF);
+    }
+}
+
 std::vector<uint8_t> DnsDatagram::serialize() const {
     std::vector<uint8_t> buffer;
 
@@ -84,27 +152,9 @@ std::vector<uint8_t> DnsDatagram::serialize() const {
         writeUint16(buffer, static_cast<uint16_t>(q.getDnsClass()));
     }
 
-    for (const auto& r : answers) {
-        writeDomainName(buffer, r.getName());
-        writeUint16(buffer, static_cast<uint16_t>(r.getType()));
-        writeUint16(buffer, static_cast<uint16_t>(r.getDnsClass()));
-        writeUint32(buffer, r.getTtl());
-
-        if (r.getType() == DnsResourceRecordType::A) {
-            auto aData = std::static_pointer_cast<DnsARecordData>(r.getRData());
-            writeUint16(buffer, 4);
-
-            struct in_addr addr;
-            if (inet_pton(AF_INET, aData->getIpAddress().c_str(), &addr) == 1) {
-                uint32_t ip = ntohl(addr.s_addr);
-                writeUint32(buffer, ip);
-            } else {
-                writeUint32(buffer, 0);
-            }
-        } else {
-            writeUint16(buffer, 0);
-        }
-    }
+    serializeRecordList(buffer, answers);
+    serializeRecordList(buffer, authorities);
+    serializeRecordList(buffer, additionals);
 
     return buffer;
 }
@@ -144,17 +194,29 @@ std::string DnsDatagram::readDomainName(const uint8_t* buffer, size_t size, size
 }
 
 void DnsDatagram::writeDomainName(std::vector<uint8_t>& buffer, const std::string& domain) {
+    if (domain.empty()) {
+        buffer.push_back(0);
+        return;
+    }
+
+    std::string normalizedDomain = domain;
+    // Strip trailing dot if present for serialization logic
+    if (!normalizedDomain.empty() && normalizedDomain.back() == '.') {
+        normalizedDomain.pop_back();
+    }
+    std::transform(normalizedDomain.begin(), normalizedDomain.end(), normalizedDomain.begin(), ::tolower);
+
     size_t start = 0;
-    size_t end = domain.find('.');
+    size_t end = normalizedDomain.find('.');
     while (end != std::string::npos) {
-        std::string label = domain.substr(start, end - start);
+        std::string label = normalizedDomain.substr(start, end - start);
         if (label.size() > 63) label = label.substr(0, 63); // DNS label limit
         buffer.push_back(static_cast<uint8_t>(label.size()));
         buffer.insert(buffer.end(), label.begin(), label.end());
         start = end + 1;
-        end = domain.find('.', start);
+        end = normalizedDomain.find('.', start);
     }
-    std::string label = domain.substr(start);
+    std::string label = normalizedDomain.substr(start);
     if (label.size() > 63) label = label.substr(0, 63);
     if (!label.empty()) {
         buffer.push_back(static_cast<uint8_t>(label.size()));

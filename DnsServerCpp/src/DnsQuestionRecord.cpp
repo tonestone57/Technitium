@@ -1,9 +1,9 @@
 #include "DnsQuestionRecord.h"
 #include <algorithm>
+#include <iostream>
 
 DnsQuestionRecord::DnsQuestionRecord(const std::string& name, DnsResourceRecordType type, DnsClass dnsClass)
     : name(name), type(type), dnsClass(dnsClass) {
-    // Basic normalization: trim trailing dot and lower case
     if (!this->name.empty() && this->name.back() == '.') {
         this->name.pop_back();
     }

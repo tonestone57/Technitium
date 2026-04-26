@@ -27,6 +27,8 @@ std::string DnsResourceRecord::toZoneFileEntry(const std::string& originDomain) 
         case DnsResourceRecordType::NS: ss << std::setw(12) << "NS"; break;
         case DnsResourceRecordType::CNAME: ss << std::setw(12) << "CNAME"; break;
         case DnsResourceRecordType::SOA: ss << std::setw(12) << "SOA"; break;
+        case DnsResourceRecordType::MX: ss << std::setw(12) << "MX"; break;
+        case DnsResourceRecordType::TXT: ss << std::setw(12) << "TXT"; break;
         default: ss << "TYPE" << std::setw(8) << static_cast<uint16_t>(type); break;
     }
     ss << "  " << rData->toZoneFileEntry(originDomain);
