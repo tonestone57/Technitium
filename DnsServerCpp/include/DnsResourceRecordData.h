@@ -75,4 +75,27 @@ private:
     std::string text;
 };
 
+class DnsSOARecordData : public DnsResourceRecordData {
+public:
+    DnsSOARecordData(const std::string& mName, const std::string& rName, uint32_t serial, uint32_t refresh, uint32_t retry, uint32_t expire, uint32_t minimum);
+    std::string toZoneFileEntry(const std::string& originDomain = "") const override;
+
+    const std::string& getMName() const { return mName; }
+    const std::string& getRName() const { return rName; }
+    uint32_t getSerial() const { return serial; }
+    uint32_t getRefresh() const { return refresh; }
+    uint32_t getRetry() const { return retry; }
+    uint32_t getExpire() const { return expire; }
+    uint32_t getMinimum() const { return minimum; }
+
+private:
+    std::string mName;
+    std::string rName;
+    uint32_t serial;
+    uint32_t refresh;
+    uint32_t retry;
+    uint32_t expire;
+    uint32_t minimum;
+};
+
 #endif // DNS_RESOURCE_RECORD_DATA_H

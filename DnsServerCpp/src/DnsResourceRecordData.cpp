@@ -17,3 +17,10 @@ std::string DnsMXRecordData::toZoneFileEntry(const std::string& originDomain) co
 
 DnsTXTRecordData::DnsTXTRecordData(const std::string& text) : text(text) {}
 std::string DnsTXTRecordData::toZoneFileEntry(const std::string& originDomain) const { return "\"" + text + "\""; }
+
+DnsSOARecordData::DnsSOARecordData(const std::string& mName, const std::string& rName, uint32_t serial, uint32_t refresh, uint32_t retry, uint32_t expire, uint32_t minimum)
+    : mName(mName), rName(rName), serial(serial), refresh(refresh), retry(retry), expire(expire), minimum(minimum) {}
+
+std::string DnsSOARecordData::toZoneFileEntry(const std::string& originDomain) const {
+    return mName + ". " + rName + ". (" + std::to_string(serial) + " " + std::to_string(refresh) + " " + std::to_string(retry) + " " + std::to_string(expire) + " " + std::to_string(minimum) + ")";
+}

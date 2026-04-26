@@ -71,12 +71,22 @@ static std::shared_ptr<DnsResourceRecordData> parseRData(const uint8_t* buffer, 
             data = std::make_shared<DnsTXTRecordData>(text);
             break;
         }
+        case DnsResourceRecordType::SOA: {
+            std::string mName = DnsDatagram::readDomainName(buffer, size, offset);
+            std::string rName = DnsDatagram::readDomainName(buffer, size, offset);
+            uint32_t serial = readUint32(buffer, offset, size);
+            uint32_t refresh = readUint32(buffer, offset, size);
+            uint32_t retry = readUint32(buffer, offset, size);
+            uint32_t expire = readUint32(buffer, offset, size);
+            uint32_t minimum = readUint32(buffer, offset, size);
+            data = std::make_shared<DnsSOARecordData>(mName, rName, serial, refresh, retry, expire, minimum);
+            break;
+        }
         default:
             offset += rdlen;
             break;
     }
 
-    // Ensure we didn't overshoot or undershoot rdlen if it's not a domain name jump
     offset = startOffset + rdlen;
     return data;
 }
@@ -211,6 +221,17 @@ static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<
                     pos += chunkLen;
                 }
                 if (text.empty()) buffer.push_back(0);
+                break;
+            }
+            case DnsResourceRecordType::SOA: {
+                auto soaData = std::static_pointer_cast<DnsSOARecordData>(r.getRData());
+                DnsDatagram::writeDomainName(buffer, soaData->getMName(), domainOffsets);
+                DnsDatagram::writeDomainName(buffer, soaData->getRName(), domainOffsets);
+                writeUint32(buffer, soaData->getSerial());
+                writeUint32(buffer, soaData->getRefresh());
+                writeUint32(buffer, soaData->getRetry());
+                writeUint32(buffer, soaData->getExpire());
+                writeUint32(buffer, soaData->getMinimum());
                 break;
             }
             default:

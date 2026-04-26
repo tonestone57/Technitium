@@ -59,18 +59,22 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
         DnsResourceRecordType type;
 
         if (typeStr == "A") {
+            if (tokens.size() < 5) continue;
             type = DnsResourceRecordType::A;
             data = std::make_shared<DnsARecordData>(tokens[4]);
         } else if (typeStr == "AAAA") {
+            if (tokens.size() < 5) continue;
             type = DnsResourceRecordType::AAAA;
             data = std::make_shared<DnsAAAARecordData>(tokens[4]);
         } else if (typeStr == "CNAME") {
+            if (tokens.size() < 5) continue;
             type = DnsResourceRecordType::CNAME;
             std::string target = tokens[4];
             std::transform(target.begin(), target.end(), target.begin(), ::tolower);
             if (!target.empty() && target.back() == '.') target.pop_back();
             data = std::make_shared<DnsCNAMERecordData>(target);
         } else if (typeStr == "NS") {
+            if (tokens.size() < 5) continue;
             type = DnsResourceRecordType::NS;
             std::string target = tokens[4];
             std::transform(target.begin(), target.end(), target.begin(), ::tolower);
@@ -85,8 +89,20 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
             if (!target.empty() && target.back() == '.') target.pop_back();
             data = std::make_shared<DnsMXRecordData>(pref, target);
         } else if (typeStr == "TXT") {
+            if (tokens.size() < 5) continue;
             type = DnsResourceRecordType::TXT;
             data = std::make_shared<DnsTXTRecordData>(tokens[4]);
+        } else if (typeStr == "SOA") {
+            if (tokens.size() < 11) continue;
+            type = DnsResourceRecordType::SOA;
+            std::string mName = tokens[4];
+            std::string rName = tokens[5];
+            uint32_t serial = std::stoul(tokens[6]);
+            uint32_t refresh = std::stoul(tokens[7]);
+            uint32_t retry = std::stoul(tokens[8]);
+            uint32_t expire = std::stoul(tokens[9]);
+            uint32_t minimum = std::stoul(tokens[10]);
+            data = std::make_shared<DnsSOARecordData>(mName, rName, serial, refresh, retry, expire, minimum);
         } else {
             continue;
         }

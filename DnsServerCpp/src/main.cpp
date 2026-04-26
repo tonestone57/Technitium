@@ -17,48 +17,55 @@ void printUsage(const char* progName) {
     std::cout << "Default port: 53" << std::endl;
 }
 
-std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManager& zoneManager, const std::string& forwarderIp, uint16_t reqId) {
+std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManager& zoneManager, const std::string& forwarderIp) {
     DnsDatagram request = DnsDatagram::readFrom(buffer, size);
     if (request.getQuestions().empty()) return {};
 
     DnsDatagram response;
-    bool handled = false;
+    response.setIdentifier(request.getIdentifier());
+    response.setResponse(true);
+    response.setOpcode(request.getOpcode());
+    response.setRecursionDesired(request.isRecursionDesired());
+
+    DnsResponseCode finalRcode = DnsResponseCode::NoError;
+    bool isAuthoritative = true;
 
     for (const auto& question : request.getQuestions()) {
+        response.addQuestion(question);
         bool nameExists = false;
         auto records = zoneManager.findRecords(question.getName(), question.getType(), nameExists);
-        if (nameExists || !forwarderIp.empty()) {
-            if (!handled) {
-                response.setIdentifier(request.getIdentifier());
-                response.setResponse(true);
-                response.setAuthoritativeAnswer(nameExists);
-                handled = true;
-            }
-            response.addQuestion(question);
+
+        if (nameExists) {
             for (const auto& record : records) {
                 response.addAnswer(record);
             }
-
-            if (records.empty()) {
-                if (nameExists) {
-                    response.setRcode(DnsResponseCode::NoError);
-                } else if (!forwarderIp.empty()) {
-                    try {
-                        DnsDatagram forwardResponse = DnsClient::query(forwarderIp, 53, question);
-                        forwardResponse.setIdentifier(request.getIdentifier());
-                        return forwardResponse.serialize();
-                    } catch (...) {
-                        response.setRcode(DnsResponseCode::ServerFailure);
-                    }
-                } else {
-                    response.setRcode(DnsResponseCode::NxDomain);
+            if (records.empty() && finalRcode == DnsResponseCode::NoError) {
+                // NODATA
+            }
+        } else if (!forwarderIp.empty()) {
+            // Not in local zone, try forwarding if it's the only question (common case)
+            if (request.getQuestions().size() == 1) {
+                try {
+                    DnsDatagram forwardResponse = DnsClient::query(forwarderIp, 53, question);
+                    forwardResponse.setIdentifier(request.getIdentifier());
+                    return forwardResponse.serialize();
+                } catch (...) {
+                    finalRcode = DnsResponseCode::ServerFailure;
                 }
+            } else {
+                finalRcode = DnsResponseCode::NxDomain;
+            }
+            isAuthoritative = false;
+        } else {
+            if (finalRcode == DnsResponseCode::NoError) {
+                finalRcode = DnsResponseCode::NxDomain;
             }
         }
     }
 
-    if (handled) return response.serialize();
-    return {};
+    response.setRcode(finalRcode);
+    response.setAuthoritativeAnswer(isAuthoritative);
+    return response.serialize();
 }
 
 void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
@@ -85,7 +92,7 @@ void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
         ssize_t n = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&cliaddr, &len);
         if (n < 0) continue;
 
-        auto responseBytes = processQuery(buffer, n, zoneManager, forwarderIp, 0);
+        auto responseBytes = processQuery(buffer, n, zoneManager, forwarderIp);
         if (!responseBytes.empty()) {
             sendto(sockfd, responseBytes.data(), responseBytes.size(), 0, (const struct sockaddr *)&cliaddr, len);
         }
@@ -125,7 +132,7 @@ void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
                 uint16_t dnsLen = (lenBuf[0] << 8) | lenBuf[1];
                 std::vector<uint8_t> buffer(dnsLen);
                 if (recv(connfd, buffer.data(), dnsLen, MSG_WAITALL) == dnsLen) {
-                    auto responseBytes = processQuery(buffer.data(), dnsLen, zoneManager, forwarderIp, 0);
+                    auto responseBytes = processQuery(buffer.data(), dnsLen, zoneManager, forwarderIp);
                     if (!responseBytes.empty()) {
                         uint16_t resLen = htons(static_cast<uint16_t>(responseBytes.size()));
                         send(connfd, &resLen, 2, 0);
