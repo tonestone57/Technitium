@@ -36,7 +36,7 @@ DnsDatagram DnsClient::query(const std::string& serverIp, int port, const DnsQue
 
     DnsDatagram request;
     static std::random_device rd;
-    static std::mt19937 gen(rd());
+    thread_local std::mt19937 gen(rd());
     std::uniform_int_distribution<> dis(0, 65535);
     request.setIdentifier(static_cast<uint16_t>(dis(gen)));
     request.setRecursionDesired(true);
