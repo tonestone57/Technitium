@@ -133,7 +133,7 @@ DnsDatagram DnsDatagram::readFrom(const uint8_t* buffer, size_t size) {
         parseRecords(buffer, size, offset, arcount, datagram.additionals);
 
     } catch (const std::exception& e) {
-        // Log or handle parsing error
+        std::cerr << "DNS Parsing Error: " << e.what() << std::endl;
     }
 
     return datagram;

@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <poll.h>
 #include <cstring>
+#include <random>
 
 DnsDatagram DnsClient::query(const std::string& serverIp, int port, const DnsQuestionRecord& question, int timeoutSec) {
     int sockfd = socket(AF_INET, SOCK_DGRAM, 0);
@@ -19,7 +20,10 @@ DnsDatagram DnsClient::query(const std::string& serverIp, int port, const DnsQue
     inet_pton(AF_INET, serverIp.c_str(), &servaddr.sin_addr);
 
     DnsDatagram request;
-    request.setIdentifier(0x1234); // Random-ish ID
+    static std::random_device rd;
+    static std::mt19937 gen(rd());
+    std::uniform_int_distribution<> dis(0, 65535);
+    request.setIdentifier(static_cast<uint16_t>(dis(gen)));
     request.setRecursionDesired(true);
     request.addQuestion(question);
 
