@@ -3,6 +3,7 @@
 #include <cstring>
 #include <stdexcept>
 #include <algorithm>
+#include <cctype>
 
 DnsDatagram::DnsDatagram() {}
 

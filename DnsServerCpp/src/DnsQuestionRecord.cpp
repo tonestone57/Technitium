@@ -1,6 +1,7 @@
 #include "DnsQuestionRecord.h"
 #include <algorithm>
 #include <iostream>
+#include <cctype>
 
 DnsQuestionRecord::DnsQuestionRecord(const std::string& name, DnsResourceRecordType type, DnsClass dnsClass)
     : name(name), type(type), dnsClass(dnsClass) {

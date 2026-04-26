@@ -1,6 +1,7 @@
 #include "ZoneManager.h"
 #include <algorithm>
 #include <iostream>
+#include <cctype>
 
 void ZoneManager::addRecord(const DnsResourceRecord& record) {
     std::string name = record.getName();

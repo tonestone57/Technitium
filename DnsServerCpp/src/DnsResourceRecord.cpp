@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <cctype>
 
 DnsResourceRecord::DnsResourceRecord(const std::string& name, DnsResourceRecordType type, DnsClass dnsClass, uint32_t ttl, std::shared_ptr<DnsResourceRecordData> rData)
     : name(name), type(type), dnsClass(dnsClass), ttl(ttl), rData(rData) {

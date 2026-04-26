@@ -4,6 +4,7 @@
 #include <vector>
 #include <iostream>
 #include <algorithm>
+#include <cctype>
 
 static std::vector<std::string> robustSplit(const std::string& line) {
     std::vector<std::string> tokens;
