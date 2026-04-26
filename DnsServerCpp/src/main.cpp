@@ -40,38 +40,43 @@ std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManage
     response.setOpcode(request.getOpcode());
     response.setRecursionDesired(request.isRecursionDesired());
 
-    DnsResponseCode finalRcode = DnsResponseCode::NoError;
-    bool isAuthoritative = true;
-    bool allLocal = true;
+    // Always echo questions back as per DNS standard
+    for (const auto& q : request.getQuestions()) {
+        response.addQuestion(q);
+    }
 
+    bool allLocal = true;
     for (const auto& question : request.getQuestions()) {
         bool nameExists = false;
-        auto records = zoneManager.findRecords(question.getName(), question.getType(), nameExists);
-
-        if (nameExists) {
-            if (records.empty()) {
-                // Name exists but no records of this type (NODATA)
-            } else {
-                for (const auto& record : records) {
-                    response.addAnswer(record);
-                }
-            }
-        } else {
+        zoneManager.findRecords(question.getName(), question.getType(), nameExists);
+        if (!nameExists) {
             allLocal = false;
             break;
         }
     }
 
-    if (allLocal) {
+    if (allLocal || forwarderIp.empty()) {
+        DnsResponseCode finalRcode = DnsResponseCode::NoError;
+        bool isAuthoritative = true;
+
         for (const auto& question : request.getQuestions()) {
-            response.addQuestion(question);
             bool nameExists = false;
             auto records = zoneManager.findRecords(question.getName(), question.getType(), nameExists);
-            if (!nameExists) {
+
+            if (nameExists) {
+                if (records.empty()) {
+                    // NODATA: Name exists but no records of this type.
+                    // RCODE remains NoError. Authority should have SOA.
+                    auto soaRecords = zoneManager.findSOA(question.getName());
+                    for (const auto& soa : soaRecords) response.addAuthority(soa);
+                } else {
+                    for (const auto& record : records) {
+                        response.addAnswer(record);
+                    }
+                }
+            } else {
+                // NXDOMAIN: Name does not exist.
                 finalRcode = DnsResponseCode::NxDomain;
-                auto soaRecords = zoneManager.findSOA(question.getName());
-                for (const auto& soa : soaRecords) response.addAuthority(soa);
-            } else if (records.empty()) {
                 auto soaRecords = zoneManager.findSOA(question.getName());
                 for (const auto& soa : soaRecords) response.addAuthority(soa);
             }
@@ -79,39 +84,21 @@ std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManage
         response.setRcode(finalRcode);
         response.setAuthoritativeAnswer(isAuthoritative);
         return response.serialize();
-    } else if (!forwarderIp.empty()) {
+    } else {
+        // Forwarding
         try {
             DnsDatagram forwardResponse = DnsClient::query(forwarderIp, 53, request.getQuestions());
             if (forwardResponse.isParsedSuccessfully()) {
                 forwardResponse.setIdentifier(request.getIdentifier());
                 return forwardResponse.serialize();
             }
-        } catch (...) {
-            finalRcode = DnsResponseCode::ServerFailure;
-        }
-        isAuthoritative = false;
-    } else {
-        // Not all local and no forwarder, return NxDomain for what we can't find
-        for (const auto& question : request.getQuestions()) {
-            response.addQuestion(question);
-            bool nameExists = false;
-            auto records = zoneManager.findRecords(question.getName(), question.getType(), nameExists);
-            if (!nameExists) {
-                finalRcode = DnsResponseCode::NxDomain;
-                auto soaRecords = zoneManager.findSOA(question.getName());
-                for (const auto& soa : soaRecords) response.addAuthority(soa);
-            } else if (records.empty()) {
-                auto soaRecords = zoneManager.findSOA(question.getName());
-                for (const auto& soa : soaRecords) response.addAuthority(soa);
-            } else {
-                for (const auto& record : records) response.addAnswer(record);
-            }
-        }
-    }
+        } catch (...) {}
 
-    response.setRcode(finalRcode);
-    response.setAuthoritativeAnswer(isAuthoritative);
-    return response.serialize();
+        // If forwarding fails, return ServerFailure but still with echoed questions
+        response.setRcode(DnsResponseCode::ServerFailure);
+        response.setAuthoritativeAnswer(false);
+        return response.serialize();
+    }
 }
 
 volatile sig_atomic_t stopServer = 0;
