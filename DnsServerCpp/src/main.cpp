@@ -144,19 +144,18 @@ void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp, Thre
 
         struct sockaddr_in cliaddr;
         socklen_t len = sizeof(cliaddr);
-        uint8_t* buffer = new uint8_t[4096];
-        ssize_t n = recvfrom(sockfd, buffer, 4096, 0, (struct sockaddr *)&cliaddr, &len);
+        std::vector<uint8_t> buffer(4096);
+        ssize_t n = recvfrom(sockfd, buffer.data(), buffer.size(), 0, (struct sockaddr *)&cliaddr, &len);
         if (n < 0) {
-            delete[] buffer;
             continue;
         }
+        buffer.resize(static_cast<size_t>(n));
 
-        pool.enqueue([sockfd, buffer, n, &zoneManager, forwarderIp, cliaddr, len]() {
-            auto responseBytes = processQuery(buffer, n, zoneManager, forwarderIp);
+        pool.enqueue([sockfd, buffer = std::move(buffer), &zoneManager, forwarderIp, cliaddr, len]() {
+            auto responseBytes = processQuery(buffer.data(), buffer.size(), zoneManager, forwarderIp);
             if (!responseBytes.empty()) {
                 sendto(sockfd, responseBytes.data(), responseBytes.size(), 0, (const struct sockaddr *)&cliaddr, len);
             }
-            delete[] buffer;
         });
     }
     close(sockfd);
