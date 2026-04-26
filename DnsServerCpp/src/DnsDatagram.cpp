@@ -115,9 +115,16 @@ static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<
             case DnsResourceRecordType::TXT: {
                 auto txtData = std::static_pointer_cast<DnsTXTRecordData>(r.getRData());
                 std::string text = txtData->getText();
-                if (text.size() > 255) text = text.substr(0, 255);
-                buffer.push_back(static_cast<uint8_t>(text.size()));
-                buffer.insert(buffer.end(), text.begin(), text.end());
+                // TXT record can have multiple character-strings, but for now we implement one
+                // Each character-string is preceded by a single byte length
+                size_t pos = 0;
+                while (pos < text.size()) {
+                    size_t chunkLen = std::min(text.size() - pos, static_cast<size_t>(255));
+                    buffer.push_back(static_cast<uint8_t>(chunkLen));
+                    buffer.insert(buffer.end(), text.begin() + pos, text.begin() + pos + chunkLen);
+                    pos += chunkLen;
+                }
+                if (text.empty()) buffer.push_back(0);
                 break;
             }
             default:

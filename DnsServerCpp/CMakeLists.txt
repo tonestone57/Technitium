@@ -6,9 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include_directories(include)
 
-file(GLOB SOURCES "src/*.cpp")
-
-add_executable(DnsServerCpp ${SOURCES})
+add_executable(DnsServerCpp
+    src/DnsDatagram.cpp
+    src/DnsQuestionRecord.cpp
+    src/DnsResourceRecord.cpp
+    src/DnsResourceRecordData.cpp
+    src/ZoneLoader.cpp
+    src/ZoneManager.cpp
+    src/main.cpp
+)
 
 if(HAIKU)
     target_link_libraries(DnsServerCpp network)

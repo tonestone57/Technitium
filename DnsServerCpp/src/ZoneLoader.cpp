@@ -40,15 +40,20 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
         if (line.empty() || line[0] == ';') continue;
 
         auto tokens = robustSplit(line);
-        if (tokens.size() < 4) continue;
+        if (tokens.size() < 5) continue; // Minimum: name, ttl, class, type, data
 
         std::string name = tokens[0];
         std::transform(name.begin(), name.end(), name.begin(), ::tolower);
         if (!name.empty() && name.back() == '.') name.pop_back();
 
-        uint32_t ttl = std::stoul(tokens[1]);
-        std::string typeStr = tokens[3];
+        uint32_t ttl;
+        try {
+            ttl = std::stoul(tokens[1]);
+        } catch (...) {
+            continue;
+        }
 
+        std::string typeStr = tokens[3];
         std::shared_ptr<DnsResourceRecordData> data;
         DnsResourceRecordType type;
 
@@ -71,6 +76,7 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
             if (!target.empty() && target.back() == '.') target.pop_back();
             data = std::make_shared<DnsNSRecordData>(target);
         } else if (typeStr == "MX") {
+            if (tokens.size() < 6) continue;
             type = DnsResourceRecordType::MX;
             uint16_t pref = static_cast<uint16_t>(std::stoul(tokens[4]));
             std::string target = tokens[5];
