@@ -25,6 +25,7 @@ static uint32_t readUint32(const uint8_t* buffer, size_t& offset, size_t size) {
 }
 
 static std::shared_ptr<DnsResourceRecordData> parseRData(const uint8_t* buffer, size_t size, size_t& offset, DnsResourceRecordType type, uint16_t rdlen) {
+    if (offset + rdlen > size) throw std::runtime_error("RDATA overflow");
     size_t startOffset = offset;
     std::shared_ptr<DnsResourceRecordData> data;
 
@@ -64,6 +65,7 @@ static std::shared_ptr<DnsResourceRecordData> parseRData(const uint8_t* buffer, 
             size_t pos = 0;
             while (pos < rdlen) {
                 uint8_t len = buffer[offset++];
+                if (pos + 1 + len > rdlen) throw std::runtime_error("Malformed TXT RDATA");
                 text.append(reinterpret_cast<const char*>(buffer + offset), len);
                 offset += len;
                 pos += 1 + len;

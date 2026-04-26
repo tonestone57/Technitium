@@ -15,6 +15,8 @@ static std::vector<std::string> robustSplit(const std::string& line) {
         char c = line[i];
         if (c == '"') {
             inQuotes = !inQuotes;
+            // Keep quotes for now to identify quoted tokens later if needed,
+            // or just strip them here. Let's strip them for simplicity in the tokens.
         } else if (std::isspace(c) && !inQuotes) {
             if (!current.empty()) {
                 tokens.push_back(current);
@@ -36,10 +38,6 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
         std::cerr << "Could not open zone file: " << filename << std::endl;
         return false;
     }
-
-    static const std::set<std::string> knownTypes = {
-        "A", "AAAA", "CNAME", "NS", "MX", "TXT", "SOA"
-    };
 
     std::string line;
     while (std::getline(file, line)) {
@@ -104,7 +102,12 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
             data = std::make_shared<DnsMXRecordData>(pref, target);
         } else if (typeStr == "TXT" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::TXT;
-            data = std::make_shared<DnsTXTRecordData>(tokens[dataIdx]);
+            // Join remaining tokens for TXT if they were split by spaces outside quotes
+            std::string text = tokens[dataIdx];
+            for (size_t i = dataIdx + 1; i < tokens.size(); ++i) {
+                text += " " + tokens[i];
+            }
+            data = std::make_shared<DnsTXTRecordData>(text);
         } else if (typeStr == "SOA" && dataIdx + 6 < tokens.size()) {
             type = DnsResourceRecordType::SOA;
             std::string mName = tokens[dataIdx];

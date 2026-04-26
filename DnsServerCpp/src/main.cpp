@@ -40,11 +40,7 @@ std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManage
             for (const auto& record : records) {
                 response.addAnswer(record);
             }
-            if (records.empty() && finalRcode == DnsResponseCode::NoError) {
-                // NODATA
-            }
         } else if (!forwarderIp.empty()) {
-            // Not in local zone, try forwarding if it's the only question (common case)
             if (request.getQuestions().size() == 1) {
                 try {
                     DnsDatagram forwardResponse = DnsClient::query(forwarderIp, 53, question);
@@ -118,9 +114,12 @@ void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
         return;
     }
 
-    listen(sockfd, 5);
+    listen(sockfd, 10);
     std::cout << "TCP DNS Server listening on port " << port << "..." << std::endl;
 
+    // A simple thread-per-connection model is used here for Haiku OS compatibility
+    // and simplicity in this core port. In a high-performance environment,
+    // an asynchronous I/O or a thread pool would be more appropriate.
     while (true) {
         struct sockaddr_in cliaddr;
         socklen_t len = sizeof(cliaddr);
