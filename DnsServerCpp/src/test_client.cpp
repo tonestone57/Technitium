@@ -1,19 +1,46 @@
 #include "DnsClient.h"
 #include <iostream>
+#include <string>
 
-int main() {
+int main(int argc, char* argv[]) {
+    if (argc < 4) {
+        std::cout << "Usage: test_client <server_ip> <port> <domain> <type>" << std::endl;
+        return 1;
+    }
+
+    std::string serverIp = argv[1];
+    int port = std::stoi(argv[2]);
+    std::string domain = argv[3];
+    std::string typeStr = argv[4];
+
+    DnsResourceRecordType type = DnsResourceRecordType::A;
+    if (typeStr == "AAAA") type = DnsResourceRecordType::AAAA;
+    else if (typeStr == "CNAME") type = DnsResourceRecordType::CNAME;
+    else if (typeStr == "NS") type = DnsResourceRecordType::NS;
+    else if (typeStr == "MX") type = DnsResourceRecordType::MX;
+    else if (typeStr == "TXT") type = DnsResourceRecordType::TXT;
+    else if (typeStr == "SOA") type = DnsResourceRecordType::SOA;
+    else if (typeStr == "PTR") type = DnsResourceRecordType::PTR;
+
     try {
-        std::cout << "Querying google.com A record from 8.8.8.8..." << std::endl;
-        DnsQuestionRecord q("google.com", DnsResourceRecordType::A, DnsClass::IN);
-        DnsDatagram response = DnsClient::query("8.8.8.8", 53, q);
+        std::cout << "Querying " << domain << " " << typeStr << " record from " << serverIp << ":" << port << "..." << std::endl;
+        DnsQuestionRecord q(domain, type, DnsClass::IN);
+        DnsDatagram response = DnsClient::query(serverIp, port, q);
 
         std::cout << "RCODE: " << (int)response.getRcode() << std::endl;
+        std::cout << "Authoritative: " << (response.isAuthoritativeAnswer() ? "Yes" : "No") << std::endl;
         std::cout << "Answer section count: " << response.getAnswers().size() << std::endl;
         for (const auto& ans : response.getAnswers()) {
             std::cout << "  - " << ans.getName() << " type " << static_cast<int>(ans.getType()) << " TTL " << ans.getTtl() << std::endl;
             if (ans.getType() == DnsResourceRecordType::A) {
                 auto aData = std::static_pointer_cast<DnsARecordData>(ans.getRData());
                 std::cout << "    IP: " << aData->getIpAddress() << std::endl;
+            } else if (ans.getType() == DnsResourceRecordType::TXT) {
+                auto txtData = std::static_pointer_cast<DnsTXTRecordData>(ans.getRData());
+                std::cout << "    TXT: " << txtData->getText() << std::endl;
+            } else if (ans.getType() == DnsResourceRecordType::SOA) {
+                auto soaData = std::static_pointer_cast<DnsSOARecordData>(ans.getRData());
+                std::cout << "    SOA: " << soaData->getMName() << " " << soaData->getRName() << " Serial: " << soaData->getSerial() << std::endl;
             }
         }
     } catch (const std::exception& e) {

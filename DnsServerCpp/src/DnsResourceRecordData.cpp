@@ -12,6 +12,9 @@ std::string DnsCNAMERecordData::toZoneFileEntry(const std::string& originDomain)
 DnsNSRecordData::DnsNSRecordData(const std::string& domain) : domain(domain) {}
 std::string DnsNSRecordData::toZoneFileEntry(const std::string& originDomain) const { return domain + "."; }
 
+DnsPTRRecordData::DnsPTRRecordData(const std::string& domain) : domain(domain) {}
+std::string DnsPTRRecordData::toZoneFileEntry(const std::string& originDomain) const { return domain + "."; }
+
 DnsMXRecordData::DnsMXRecordData(uint16_t preference, const std::string& domain) : preference(preference), domain(domain) {}
 std::string DnsMXRecordData::toZoneFileEntry(const std::string& originDomain) const { return std::to_string(preference) + " " + domain + "."; }
 

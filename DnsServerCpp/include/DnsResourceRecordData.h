@@ -53,6 +53,16 @@ private:
     std::string domain;
 };
 
+class DnsPTRRecordData : public DnsResourceRecordData {
+public:
+    DnsPTRRecordData(const std::string& domain);
+    std::string toZoneFileEntry(const std::string& originDomain = "") const override;
+    const std::string& getDomain() const { return domain; }
+
+private:
+    std::string domain;
+};
+
 class DnsMXRecordData : public DnsResourceRecordData {
 public:
     DnsMXRecordData(uint16_t preference, const std::string& domain);

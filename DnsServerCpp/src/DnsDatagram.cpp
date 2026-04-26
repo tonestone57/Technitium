@@ -4,8 +4,9 @@
 #include <stdexcept>
 #include <algorithm>
 #include <cctype>
+#include <memory>
 
-DnsDatagram::DnsDatagram() {}
+DnsDatagram::DnsDatagram() : parsedSuccessfully(true) {}
 
 static uint16_t readUint16(const uint8_t* buffer, size_t& offset, size_t size) {
     if (offset + 2 > size) throw std::runtime_error("Buffer overflow");
@@ -52,6 +53,10 @@ static std::shared_ptr<DnsResourceRecordData> parseRData(const uint8_t* buffer, 
         }
         case DnsResourceRecordType::NS: {
             data = std::make_shared<DnsNSRecordData>(DnsDatagram::readDomainName(buffer, size, offset));
+            break;
+        }
+        case DnsResourceRecordType::PTR: {
+            data = std::make_shared<DnsPTRRecordData>(DnsDatagram::readDomainName(buffer, size, offset));
             break;
         }
         case DnsResourceRecordType::MX: {
@@ -110,7 +115,10 @@ static void parseRecords(const uint8_t* buffer, size_t size, size_t& offset, uin
 
 DnsDatagram DnsDatagram::readFrom(const uint8_t* buffer, size_t size) {
     DnsDatagram datagram;
-    if (size < 12) return datagram;
+    if (size < 12) {
+        datagram.parsedSuccessfully = false;
+        return datagram;
+    }
 
     size_t offset = 0;
     try {
@@ -146,6 +154,7 @@ DnsDatagram DnsDatagram::readFrom(const uint8_t* buffer, size_t size) {
 
     } catch (const std::exception& e) {
         std::cerr << "DNS Parsing Error: " << e.what() << std::endl;
+        datagram.parsedSuccessfully = false;
     }
 
     return datagram;
@@ -204,6 +213,11 @@ static void serializeRecordList(std::vector<uint8_t>& buffer, const std::vector<
             case DnsResourceRecordType::NS: {
                 auto nsData = std::static_pointer_cast<DnsNSRecordData>(r.getRData());
                 DnsDatagram::writeDomainName(buffer, nsData->getDomain(), domainOffsets);
+                break;
+            }
+            case DnsResourceRecordType::PTR: {
+                auto ptrData = std::static_pointer_cast<DnsPTRRecordData>(r.getRData());
+                DnsDatagram::writeDomainName(buffer, ptrData->getDomain(), domainOffsets);
                 break;
             }
             case DnsResourceRecordType::MX: {

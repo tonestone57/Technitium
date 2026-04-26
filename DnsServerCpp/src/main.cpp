@@ -12,15 +12,26 @@
 #include <poll.h>
 #include <cstdio>
 #include <functional>
+#include <csignal>
+
+void ignore_sigpipe() {
+#ifndef _WIN32
+    struct sigaction sa;
+    sa.sa_handler = SIG_IGN;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGPIPE, &sa, nullptr);
+#endif
+}
 
 void printUsage(const char* progName) {
-    std::cout << "Usage: " << progName << " [-p <port>] [-f <forwarder_ip>] <zone_file>" << std::endl;
+    std::cout << "Usage: " << progName << " [-p <port>] [-f <forwarder_ip[:port]>] <zone_file>" << std::endl;
     std::cout << "Default port: 53" << std::endl;
 }
 
 std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManager& zoneManager, const std::string& forwarderIp) {
     DnsDatagram request = DnsDatagram::readFrom(buffer, size);
-    if (request.getQuestions().empty()) return {};
+    if (!request.isParsedSuccessfully() || request.getQuestions().empty()) return {};
 
     DnsDatagram response;
     response.setIdentifier(request.getIdentifier());
@@ -44,8 +55,10 @@ std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManage
             if (request.getQuestions().size() == 1) {
                 try {
                     DnsDatagram forwardResponse = DnsClient::query(forwarderIp, 53, question);
-                    forwardResponse.setIdentifier(request.getIdentifier());
-                    return forwardResponse.serialize();
+                    if (forwardResponse.isParsedSuccessfully()) {
+                        forwardResponse.setIdentifier(request.getIdentifier());
+                        return forwardResponse.serialize();
+                    }
                 } catch (...) {
                     finalRcode = DnsResponseCode::ServerFailure;
                 }
@@ -63,6 +76,11 @@ std::vector<uint8_t> processQuery(const uint8_t* buffer, size_t size, ZoneManage
     response.setRcode(finalRcode);
     response.setAuthoritativeAnswer(isAuthoritative);
     return response.serialize();
+}
+
+volatile sig_atomic_t stopServer = 0;
+void handleSignal(int sig) {
+    stopServer = 1;
 }
 
 void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
@@ -83,7 +101,12 @@ void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
     std::cout << "UDP DNS Server listening on port " << port << "..." << std::endl;
 
     uint8_t buffer[1024];
-    while (true) {
+    while (!stopServer) {
+        struct pollfd pfd;
+        pfd.fd = sockfd;
+        pfd.events = POLLIN;
+        if (poll(&pfd, 1, 1000) <= 0) continue;
+
         struct sockaddr_in cliaddr;
         socklen_t len = sizeof(cliaddr);
         ssize_t n = recvfrom(sockfd, buffer, sizeof(buffer), 0, (struct sockaddr *)&cliaddr, &len);
@@ -94,6 +117,7 @@ void udpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
             sendto(sockfd, responseBytes.data(), responseBytes.size(), 0, (const struct sockaddr *)&cliaddr, len);
         }
     }
+    close(sockfd);
 }
 
 void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
@@ -117,32 +141,40 @@ void tcpServer(int port, ZoneManager& zoneManager, std::string forwarderIp) {
     listen(sockfd, 10);
     std::cout << "TCP DNS Server listening on port " << port << "..." << std::endl;
 
-    // A simple thread-per-connection model is used here for Haiku OS compatibility
-    // and simplicity in this core port. In a high-performance environment,
-    // an asynchronous I/O or a thread pool would be more appropriate.
-    while (true) {
+    while (!stopServer) {
+        struct pollfd pfd;
+        pfd.fd = sockfd;
+        pfd.events = POLLIN;
+        if (poll(&pfd, 1, 1000) <= 0) continue;
+
         struct sockaddr_in cliaddr;
         socklen_t len = sizeof(cliaddr);
         int connfd = accept(sockfd, (struct sockaddr *)&cliaddr, &len);
         if (connfd < 0) continue;
 
         std::thread([connfd, &zoneManager, forwarderIp]() {
-            uint8_t lenBuf[2];
-            if (recv(connfd, lenBuf, 2, MSG_WAITALL) == 2) {
-                uint16_t dnsLen = (lenBuf[0] << 8) | lenBuf[1];
-                std::vector<uint8_t> buffer(dnsLen);
-                if (recv(connfd, buffer.data(), dnsLen, MSG_WAITALL) == dnsLen) {
-                    auto responseBytes = processQuery(buffer.data(), dnsLen, zoneManager, forwarderIp);
-                    if (!responseBytes.empty()) {
-                        uint16_t resLen = htons(static_cast<uint16_t>(responseBytes.size()));
-                        send(connfd, &resLen, 2, 0);
-                        send(connfd, responseBytes.data(), responseBytes.size(), 0);
+            struct pollfd cpfd;
+            cpfd.fd = connfd;
+            cpfd.events = POLLIN;
+            if (poll(&cpfd, 1, 5000) > 0) {
+                uint8_t lenBuf[2];
+                if (recv(connfd, lenBuf, 2, MSG_WAITALL) == 2) {
+                    uint16_t dnsLen = (lenBuf[0] << 8) | lenBuf[1];
+                    std::vector<uint8_t> buffer(dnsLen);
+                    if (recv(connfd, buffer.data(), dnsLen, MSG_WAITALL) == dnsLen) {
+                        auto responseBytes = processQuery(buffer.data(), dnsLen, zoneManager, forwarderIp);
+                        if (!responseBytes.empty()) {
+                            uint16_t resLen = htons(static_cast<uint16_t>(responseBytes.size()));
+                            send(connfd, &resLen, 2, 0);
+                            send(connfd, responseBytes.data(), responseBytes.size(), 0);
+                        }
                     }
                 }
             }
             close(connfd);
         }).detach();
     }
+    close(sockfd);
 }
 
 int main(int argc, char* argv[]) {
@@ -169,6 +201,10 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
+    signal(SIGINT, handleSignal);
+    signal(SIGTERM, handleSignal);
+    ignore_sigpipe();
+
     ZoneManager zoneManager;
     if (!ZoneLoader::load(zoneManager, zoneFile)) {
         std::cerr << "Failed to load zone file: " << zoneFile << "." << std::endl;
@@ -179,5 +215,6 @@ int main(int argc, char* argv[]) {
     tcpServer(port, zoneManager, forwarderIp);
 
     udpThread.join();
+    std::cout << "Server stopped." << std::endl;
     return 0;
 }

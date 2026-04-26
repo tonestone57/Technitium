@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <vector>
+#include <string>
 #include <stdexcept>
 #include <poll.h>
 #include <cstring>
@@ -17,7 +18,21 @@ DnsDatagram DnsClient::query(const std::string& serverIp, int port, const DnsQue
     memset(&servaddr, 0, sizeof(servaddr));
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(static_cast<uint16_t>(port));
-    inet_pton(AF_INET, serverIp.c_str(), &servaddr.sin_addr);
+
+    // Support parsing IP:PORT in serverIp
+    std::string ip = serverIp;
+    int targetPort = port;
+    size_t colon = serverIp.find(':');
+    if (colon != std::string::npos) {
+        ip = serverIp.substr(0, colon);
+        targetPort = std::stoi(serverIp.substr(colon + 1));
+        servaddr.sin_port = htons(static_cast<uint16_t>(targetPort));
+    }
+
+    if (inet_pton(AF_INET, ip.c_str(), &servaddr.sin_addr) <= 0) {
+        close(sockfd);
+        throw std::runtime_error("Invalid server IP address");
+    }
 
     DnsDatagram request;
     static std::random_device rd;
