@@ -11,12 +11,20 @@ static std::vector<std::string> robustSplit(const std::string& line) {
     std::vector<std::string> tokens;
     std::string current;
     bool inQuotes = false;
+    bool escaped = false;
     for (size_t i = 0; i < line.size(); ++i) {
         char c = line[i];
+        if (escaped) {
+            current += c;
+            escaped = false;
+            continue;
+        }
+        if (c == '\\') {
+            escaped = true;
+            continue;
+        }
         if (c == '"') {
             inQuotes = !inQuotes;
-            // Keep quotes for now to identify quoted tokens later if needed,
-            // or just strip them here. Let's strip them for simplicity in the tokens.
         } else if (std::isspace(c) && !inQuotes) {
             if (!current.empty()) {
                 tokens.push_back(current);
@@ -32,6 +40,20 @@ static std::vector<std::string> robustSplit(const std::string& line) {
     return tokens;
 }
 
+static std::string normalizeDomain(std::string domain, const std::string& origin) {
+    if (domain == "@") return origin;
+    if (domain.empty()) return origin;
+    if (domain.back() != '.') {
+        if (!origin.empty()) {
+            domain += "." + origin;
+        }
+    } else {
+        domain.pop_back(); // Remove trailing dot for internal storage
+    }
+    std::transform(domain.begin(), domain.end(), domain.begin(), ::tolower);
+    return domain;
+}
+
 bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -40,40 +62,77 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
     }
 
     std::string line;
+    std::string origin;
+    std::string lastRecordName;
+    uint32_t defaultTtl = 3600;
+
     while (std::getline(file, line)) {
-        if (line.empty() || line[0] == ';') continue;
+        size_t commentPos = line.find(';');
+        if (commentPos != std::string::npos) {
+            line = line.substr(0, commentPos);
+        }
+        if (line.empty()) continue;
 
         auto tokens = robustSplit(line);
-        if (tokens.size() < 3) continue;
+        if (tokens.empty()) continue;
 
-        std::string name = tokens[0];
-        std::transform(name.begin(), name.end(), name.begin(), ::tolower);
-        if (!name.empty() && name.back() == '.') name.pop_back();
+        if (tokens[0] == "$ORIGIN") {
+            if (tokens.size() > 1) {
+                origin = tokens[1];
+                if (!origin.empty() && origin.back() == '.') origin.pop_back();
+                std::transform(origin.begin(), origin.end(), origin.begin(), ::tolower);
+            }
+            continue;
+        }
 
-        uint32_t ttl = 3600;
-        size_t typeIdx = 1;
+        if (tokens[0] == "$TTL") {
+            if (tokens.size() > 1) {
+                try {
+                    defaultTtl = static_cast<uint32_t>(std::stoul(tokens[1]));
+                } catch (...) {}
+            }
+            continue;
+        }
 
-        // Try to parse TTL at index 1
+        size_t tokenIdx = 0;
+        std::string name;
+
+        if (std::isspace(line[0])) {
+            name = lastRecordName;
+        } else {
+            name = normalizeDomain(tokens[0], origin);
+            lastRecordName = name;
+            tokenIdx++;
+        }
+
+        if (tokenIdx >= tokens.size()) continue;
+
+        uint32_t ttl = defaultTtl;
+        // Try to parse TTL
         try {
             size_t pos;
-            unsigned long val = std::stoul(tokens[1], &pos);
-            if (pos == tokens[1].size()) {
+            unsigned long val = std::stoul(tokens[tokenIdx], &pos);
+            if (pos == tokens[tokenIdx].size()) {
                 ttl = static_cast<uint32_t>(val);
-                typeIdx = 2;
+                tokenIdx++;
             }
         } catch (...) {}
 
+        if (tokenIdx >= tokens.size()) continue;
+
         // Skip "IN" if present
-        if (typeIdx < tokens.size() && tokens[typeIdx] == "IN") {
-            typeIdx++;
+        if (tokens[tokenIdx] == "IN") {
+            tokenIdx++;
         }
 
-        if (typeIdx >= tokens.size()) continue;
+        if (tokenIdx >= tokens.size()) continue;
 
-        std::string typeStr = tokens[typeIdx];
+        std::string typeStr = tokens[tokenIdx];
+        tokenIdx++;
+
         std::shared_ptr<DnsResourceRecordData> data;
         DnsResourceRecordType type;
-        size_t dataIdx = typeIdx + 1;
+        size_t dataIdx = tokenIdx;
 
         if (typeStr == "A" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::A;
@@ -83,43 +142,44 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
             data = std::make_shared<DnsAAAARecordData>(tokens[dataIdx]);
         } else if (typeStr == "CNAME" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::CNAME;
-            std::string target = tokens[dataIdx];
-            std::transform(target.begin(), target.end(), target.begin(), ::tolower);
-            if (!target.empty() && target.back() == '.') target.pop_back();
-            data = std::make_shared<DnsCNAMERecordData>(target);
+            data = std::make_shared<DnsCNAMERecordData>(normalizeDomain(tokens[dataIdx], origin));
         } else if (typeStr == "NS" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::NS;
-            std::string target = tokens[dataIdx];
-            std::transform(target.begin(), target.end(), target.begin(), ::tolower);
-            if (!target.empty() && target.back() == '.') target.pop_back();
-            data = std::make_shared<DnsNSRecordData>(target);
+            data = std::make_shared<DnsNSRecordData>(normalizeDomain(tokens[dataIdx], origin));
+        } else if (typeStr == "PTR" && dataIdx < tokens.size()) {
+            type = DnsResourceRecordType::PTR;
+            data = std::make_shared<DnsPTRRecordData>(normalizeDomain(tokens[dataIdx], origin));
         } else if (typeStr == "MX" && dataIdx + 1 < tokens.size()) {
             try {
                 type = DnsResourceRecordType::MX;
                 uint16_t pref = static_cast<uint16_t>(std::stoul(tokens[dataIdx]));
-                std::string target = tokens[dataIdx + 1];
-                std::transform(target.begin(), target.end(), target.begin(), ::tolower);
-                if (!target.empty() && target.back() == '.') target.pop_back();
-                data = std::make_shared<DnsMXRecordData>(pref, target);
+                data = std::make_shared<DnsMXRecordData>(pref, normalizeDomain(tokens[dataIdx + 1], origin));
             } catch (...) { continue; }
         } else if (typeStr == "TXT" && dataIdx < tokens.size()) {
             type = DnsResourceRecordType::TXT;
-            // Join remaining tokens for TXT if they were split by spaces outside quotes
             std::string text = tokens[dataIdx];
             for (size_t i = dataIdx + 1; i < tokens.size(); ++i) {
                 text += " " + tokens[i];
             }
             data = std::make_shared<DnsTXTRecordData>(text);
-        } else if (typeStr == "SOA" && dataIdx + 6 < tokens.size()) {
+        } else if (typeStr == "SOA" && dataIdx < tokens.size()) {
             try {
                 type = DnsResourceRecordType::SOA;
-                std::string mName = tokens[dataIdx];
-                std::string rName = tokens[dataIdx + 1];
-                uint32_t serial = std::stoul(tokens[dataIdx + 2]);
-                uint32_t refresh = std::stoul(tokens[dataIdx + 3]);
-                uint32_t retry = std::stoul(tokens[dataIdx + 4]);
-                uint32_t expire = std::stoul(tokens[dataIdx + 5]);
-                uint32_t minimum = std::stoul(tokens[dataIdx + 6]);
+                std::vector<std::string> soaTokens;
+                for (size_t i = dataIdx; i < tokens.size(); ++i) {
+                    if (tokens[i] != "(" && tokens[i] != ")") {
+                        soaTokens.push_back(tokens[i]);
+                    }
+                }
+                if (soaTokens.size() < 7) continue;
+
+                std::string mName = normalizeDomain(soaTokens[0], origin);
+                std::string rName = normalizeDomain(soaTokens[1], origin);
+                uint32_t serial = std::stoul(soaTokens[2]);
+                uint32_t refresh = std::stoul(soaTokens[3]);
+                uint32_t retry = std::stoul(soaTokens[4]);
+                uint32_t expire = std::stoul(soaTokens[5]);
+                uint32_t minimum = std::stoul(soaTokens[6]);
                 data = std::make_shared<DnsSOARecordData>(mName, rName, serial, refresh, retry, expire, minimum);
             } catch (...) { continue; }
         } else {
