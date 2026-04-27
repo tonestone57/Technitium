@@ -1,0 +1,9 @@
+example.com. 3600 IN SOA ns1.example.com. admin.example.com. 2023101001 7200 3600 1209600 3600
+example.com. 3600 IN NS ns1.example.com.
+example.com. 3600 IN NS ns2.example.com.
+ns1.example.com. 3600 IN A 192.168.1.1
+ns2.example.com. 3600 IN A 192.168.1.2
+www.example.com. 3600 IN A 192.168.1.10
+mail.example.com. 3600 IN A 192.168.1.20
+mail.example.com. 3600 IN MX 10 mail.example.com.
+example.com. 3600 IN TXT "v=spf1 include:_spf.google.com ~all"
