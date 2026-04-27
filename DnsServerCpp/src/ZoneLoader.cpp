@@ -54,6 +54,19 @@ static std::string normalizeDomain(std::string domain, const std::string& origin
     return domain;
 }
 
+static int countChar(const std::string& s, char target) {
+    int count = 0;
+    bool inQuotes = false;
+    bool escaped = false;
+    for (char c : s) {
+        if (escaped) { escaped = false; continue; }
+        if (c == '\\') { escaped = true; continue; }
+        if (c == '"') { inQuotes = !inQuotes; continue; }
+        if (!inQuotes && c == target) count++;
+    }
+    return count;
+}
+
 bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
     std::ifstream file(filename);
     if (!file.is_open()) {
@@ -65,30 +78,37 @@ bool ZoneLoader::load(ZoneManager& zoneManager, const std::string& filename) {
     std::string origin;
     std::string lastRecordName;
     uint32_t defaultTtl = 3600;
-    bool inMultiline = false;
+    int parenDepth = 0;
     std::string multilineBuffer;
+    bool startingMultiline = false;
 
     while (std::getline(file, line)) {
         size_t commentPos = line.find(';');
         if (commentPos != std::string::npos) {
             line = line.substr(0, commentPos);
         }
-        if (line.empty()) continue;
+        if (line.empty() && parenDepth == 0) continue;
 
-        if (!inMultiline) {
-            if (line.find('(') != std::string::npos && line.find(')') == std::string::npos) {
-                inMultiline = true;
-                multilineBuffer = line;
-                continue;
-            }
-        } else {
+        int openParens = countChar(line, '(');
+        int closeParens = countChar(line, ')');
+
+        if (parenDepth == 0 && openParens > 0) {
+            startingMultiline = true;
+            multilineBuffer = line;
+            parenDepth += openParens - closeParens;
+        } else if (parenDepth > 0) {
             multilineBuffer += " " + line;
-            if (line.find(')') != std::string::npos) {
-                inMultiline = false;
-                line = multilineBuffer;
-            } else {
-                continue;
-            }
+            parenDepth += openParens - closeParens;
+        } else {
+            startingMultiline = false;
+        }
+
+        if (parenDepth > 0) continue;
+
+        if (startingMultiline || multilineBuffer != "") {
+            line = multilineBuffer;
+            multilineBuffer = "";
+            startingMultiline = false;
         }
 
         auto tokens = robustSplit(line);
