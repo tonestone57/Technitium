@@ -1,9 +1,0 @@
-$ORIGIN example.com.
-@ IN SOA ns1 admin (
-    2023101001
-    7200
-    3600
-    1209600
-    3600
-)
-www IN A 1.2.3.4
